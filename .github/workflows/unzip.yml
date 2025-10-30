@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'Apps.zip'
+      - 'narayan662122-arch-Faluda-255bc12.zip'
 
 permissions:
   contents: write
@@ -22,14 +22,14 @@ jobs:
       - name: Unzip files
         run: |
           echo "??? Unzipping app.zip..."
-          unzip -o Apps.zip
+          unzip -o narayan662122-arch-Faluda-255bc12.zip
           echo "✅ Files unzipped successfully!"
           ls -la
 
       - name: Remove ZIP file
         run: |
           echo "???️  Removing ZIP file..."
-          rm Apps.zip
+          rm narayan662122-arch-Faluda-255bc12.zip
 
       - name: Configure Git
         run: |
