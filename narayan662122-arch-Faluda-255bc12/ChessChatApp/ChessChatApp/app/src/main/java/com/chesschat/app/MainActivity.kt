@@ -18,23 +18,7 @@ class MainActivity : AppCompatActivity() {
             // Yahan baad me code add karenge
         }
     }
-}    private fun checkOverlayPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                
-                AlertDialog.Builder(this)
-                    .setTitle("Overlay Permission Required")
-                    .setMessage("This app needs permission to display content over other apps for move detection overlay.")
-                    .setPositiveButton("Grant Permission") { dialog, _ ->
-                        startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
-                        dialog.dismiss()
-                    }
-                    .setNegativeButton("Cancel") { dialog, _ ->
-                        Toast.makeText(this, "Overlay permission denied. Some features may not work.", Toast.LENGTH_LONG).show()
+}                        Toast.makeText(this, "Overlay permission denied. Some features may not work.", Toast.LENGTH_LONG).show()
                         dialog.dismiss()
                     }
                     .setCancelable(false)
