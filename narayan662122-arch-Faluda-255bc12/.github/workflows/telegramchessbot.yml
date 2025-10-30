@@ -1,0 +1,363 @@
+name: Deploy Chess Bot
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Cache pip
+      id: cache-pip
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/pip
+          /opt/hostedtoolcache/Python/3.9.23/x64/lib/python3.9/site-packages
+        key: ${{ runner.os }}-pip-packages-v1
+    - name: Install Python dependencies
+      if: steps.cache-pip.outputs.cache-hit != 'true'
+      run: |
+        python -m pip install --upgrade pip
+        pip install python-telegram-bot python-chess nest_asyncio
+        
+    - name: Cache Stockfish
+      id: cache-stockfish
+      uses: actions/cache@v3
+      with:
+        path: ~/stockfish
+        key: ${{ runner.os }}-stockfish-binary-v1
+        
+    - name: Install Stockfish
+      if: steps.cache-stockfish.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ~/stockfish
+        wget -q https://github.com/official-stockfish/Stockfish/releases/download/sf_16/stockfish-ubuntu-x86-64-avx2.tar -O stockfish.tar
+        tar -xf stockfish.tar
+        mv stockfish/stockfish-ubuntu-x86-64-avx2 ~/stockfish/stockfish
+        chmod +x ~/stockfish/stockfish
+        rm -rf stockfish stockfish.tar
+        
+    - name: Setup Stockfish path
+      run: |
+        echo "$HOME/stockfish" >> $GITHUB_PATH
+        
+    - name: Create chess bot script
+      run: |
+        cat > chess_bot.py << 'EOF'
+        # -----------------------------
+        # Setup / Install
+        # -----------------------------
+        import os
+        import chess
+        import chess.engine
+        import chess.polyglot
+        import nest_asyncio
+        nest_asyncio.apply()
+
+        from telegram import Update
+        from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+        # -----------------------------
+        # Config
+        # -----------------------------
+        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+        STOCKFISH_PATH = os.path.expanduser("~/stockfish/stockfish")
+        ENGINE_TIME = 0.8
+        ENGINE_MATE_DEPTH = 20
+        ENGINE_FALLBACK_DEPTH = 15
+        MAX_TRAP_CHECKS = 1000
+
+        POLYGLOT_BOOKS = [
+            "/content/ProDeo.bin",
+            "/content/Titans.bin",
+            "/content/Human.bin",
+            "/content/komodo.bin",
+            "/content/rodent.bin"
+        ]
+
+        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+
+        # -----------------------------
+        # Manual TRAPBOOK
+        # -----------------------------
+        TRAPBOOK = [
+            {"name":"Italian Game Trap","side":"white","sequence":["e2e4","e7e5","g1f3","b8c6"],"priority":76, "fallback_trap":"Legal's Mate Trap"},
+            {"name":"Fool's Mate","side":"black","sequence":["f2f3","e7e5","g2g4","d8h4"],"priority":100, "fallback_trap":None},
+            {"name":"Legal's Mate Trap","side":"white","sequence":["e2e4","e7e5","d2d3","b8c6","f1c4","g8f6","g1f3","d8e7","f3g5"],"priority":50, "fallback_trap":None},
+        ]
+        TRAPBOOK.sort(key=lambda t: -t.get("priority", 0))
+        TRAPBOOK_MAP = {trap["name"]: trap for trap in TRAPBOOK}
+
+        games = {}
+
+        # -----------------------------
+        # Polyglot opening with multiple books
+        # -----------------------------
+        def get_polyglot_move(board):
+            for book_path in POLYGLOT_BOOKS:
+                try:
+                    if not os.path.exists(book_path):
+                        continue
+                    with chess.polyglot.open_reader(book_path) as reader:
+                        entries = list(reader.find_all(board))
+                        if entries:
+                            entries.sort(key=lambda e: -e.weight)
+                            return entries[0].move, os.path.basename(book_path)
+                except:
+                    continue
+            return None, None
+
+        # -----------------------------
+        # Trap functions
+        # -----------------------------
+        def find_applicable_trap_manual(board: chess.Board, engine_side: str):
+            played = [m.uci() for m in board.move_stack]
+            checks = 0
+            for trap in TRAPBOOK:
+                if checks >= MAX_TRAP_CHECKS: break
+                checks += 1
+                if trap["side"] != engine_side: continue
+                seq = trap["sequence"]
+                if len(played) >= len(seq): continue
+                if played == seq[:len(played)]:
+                    next_move = seq[len(played)]
+                    candidate = chess.Move.from_uci(next_move)
+                    if candidate in board.legal_moves:
+                        return trap, next_move
+            return None, None
+
+        def find_applicable_trap_linked(board: chess.Board, engine_side: str, last_trap_name=None):
+            played = [m.uci() for m in board.move_stack]
+            checks = 0
+            traps_to_check = []
+            if last_trap_name and last_trap_name in TRAPBOOK_MAP:
+                fallback = TRAPBOOK_MAP[last_trap_name].get("fallback_trap")
+                if fallback:
+                    traps_to_check.append(TRAPBOOK_MAP[fallback])
+            traps_to_check.extend(TRAPBOOK)
+            for trap in traps_to_check:
+                if checks >= MAX_TRAP_CHECKS: break
+                checks += 1
+                if trap["side"] != engine_side: continue
+                seq = trap["sequence"]
+                if len(played) >= len(seq): continue
+                if played == seq[:len(played)]:
+                    next_move = seq[len(played)]
+                    candidate = chess.Move.from_uci(next_move)
+                    if candidate in board.legal_moves:
+                        return trap, next_move
+            return None, None
+
+        # -----------------------------
+        # Deadly King-hunt
+        # -----------------------------
+        def get_king_hunt_move(board):
+            try:
+                info = engine.analyse(board, chess.engine.Limit(time=ENGINE_TIME, mate=ENGINE_MATE_DEPTH))
+                mate_line = info["score"].pov(board.turn).mate
+                if mate_line is not None:
+                    return info["pv"][0]
+
+                legal_moves = list(board.legal_moves)
+                best_move = None
+                best_score = -9999
+                enemy_king_sq = board.king(not board.turn)
+
+                for move in legal_moves:
+                    board.push(move)
+                    score = 0
+                    if board.is_check(): score += 100
+                    if enemy_king_sq is not None:
+                        dist = chess.square_distance(move.to_square, enemy_king_sq)
+                        score += max(0, 50 - dist*5)
+                    if board.is_capture(move): score += 20
+                    board.pop()
+                    if score > best_score:
+                        best_score = score
+                        best_move = move
+
+                if best_move: return best_move
+                result = engine.play(board, chess.engine.Limit(depth=ENGINE_FALLBACK_DEPTH))
+                return result.move
+            except:
+                result = engine.play(board, chess.engine.Limit(depth=ENGINE_FALLBACK_DEPTH))
+                return result.move
+
+        # -----------------------------
+        # Unified bot move
+        # -----------------------------
+        def get_bot_move(board, engine_side, last_trap_name=None):
+            poly_move, book_name = get_polyglot_move(board)
+            if poly_move: return poly_move, f"Polyglot ({book_name})"
+            trap, next_move = find_applicable_trap_linked(board, engine_side, last_trap_name)
+            if trap and next_move: return chess.Move.from_uci(next_move), trap["name"]
+            trap, next_move = find_applicable_trap_manual(board, engine_side)
+            if trap and next_move: return chess.Move.from_uci(next_move), trap["name"]
+            mv = get_king_hunt_move(board)
+            return mv, "King-hunt"
+
+        # -----------------------------
+        # Telegram handlers
+        # -----------------------------
+        async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            chat_id = update.effective_chat.id
+            games[chat_id] = {"board": chess.Board(), "user_color": None, "awaiting_color": True, "active_trap": None}
+            await update.message.reply_text("Choose your color: white or black")
+
+        async def handle_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            chat_id = update.effective_chat.id
+            text = update.message.text.strip().lower()
+            if chat_id not in games:
+                await update.message.reply_text("Start a game first with /start")
+                return
+
+            game = games[chat_id]
+            board = game["board"]
+
+            # Single-dot correction
+            if text.startswith(".") and not text.startswith(".."):
+                new_move_uci = text[1:]
+                if len(board.move_stack) < 1:
+                    await update.message.reply_text("No move to correct.")
+                    return
+                board.pop()
+                try:
+                    move = chess.Move.from_uci(new_move_uci)
+                    if move not in board.legal_moves:
+                        await update.message.reply_text("Illegal corrected move.")
+                        return
+                    board.push(move)
+                    await update.message.reply_text(f"Your move corrected to {new_move_uci}")
+                except:
+                    await update.message.reply_text("Invalid format for correction.")
+                return
+
+            # Double-dot correction
+            if text.startswith(".."):
+                new_move_uci = text[2:]
+                if len(board.move_stack) < 2:
+                    await update.message.reply_text("Not enough moves to correct enemy.")
+                    return
+                try:
+                    board.pop()
+                    board.pop()
+                    move = chess.Move.from_uci(new_move_uci)
+                    if move not in board.legal_moves:
+                        await update.message.reply_text("Illegal corrected enemy move.")
+                        return
+                    board.push(move)
+                    await update.message.reply_text(f"Enemy move corrected to {new_move_uci}")
+                    engine_side = "black" if game["user_color"]=="white" else "white"
+                    mv, trap_name = get_bot_move(board, engine_side, game.get("active_trap"))
+                    board.push(mv)
+                    game["active_trap"] = trap_name if trap_name != "King-hunt" else None
+                    await update.message.reply_text(f"{mv.uci()}  ({trap_name})")
+                except:
+                    await update.message.reply_text("Error correcting enemy move.")
+                return
+
+            # Color selection
+            if game["awaiting_color"]:
+                if text in ["white","black"]:
+                    game["user_color"] = text
+                    game["awaiting_color"] = False
+                    await update.message.reply_text(f"Game started! You are {text.upper()}. Send moves in UCI (e2e4).")
+                    if text=="black":
+                        engine_side = "white"
+                        mv, trap_name = get_bot_move(board, engine_side)
+                        board.push(mv)
+                        game["active_trap"] = trap_name if trap_name != "King-hunt" else None
+                        await update.message.reply_text(f"{mv.uci()}  ({trap_name})")
+                else:
+                    await update.message.reply_text("Choose 'white' or 'black'")
+                return
+
+            # Player move
+            user_color = game["user_color"]
+            is_player_turn = (board.turn and user_color=="white") or (not board.turn and user_color=="black")
+            if not is_player_turn:
+                await update.message.reply_text("Not your turn")
+                return
+
+            try:
+                move = chess.Move.from_uci(text)
+            except:
+                await update.message.reply_text("Invalid move. Use UCI like e2e4")
+                return
+            if move not in board.legal_moves:
+                await update.message.reply_text("Illegal move")
+                return
+            board.push(move)
+
+            if board.is_game_over():
+                await update.message.reply_text(f"Game over: {board.result()}")
+                del games[chat_id]
+                return
+
+            engine_side = "black" if user_color=="white" else "white"
+            mv, trap_name = get_bot_move(board, engine_side, game.get("active_trap"))
+            board.push(mv)
+            game["active_trap"] = trap_name if trap_name != "King-hunt" else None
+            await update.message.reply_text(f"{mv.uci()}  ({trap_name})")
+
+            if board.is_game_over():
+                await update.message.reply_text(f"Game over: {board.result()}")
+                del games[chat_id]
+
+        # -----------------------------
+        # Sync board from FEN
+        # -----------------------------
+        async def sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            chat_id = update.effective_chat.id
+            if chat_id not in games:
+                await update.message.reply_text("Start a game first with /start")
+                return
+
+            if not context.args:
+                await update.message.reply_text("Send FEN after /sync")
+                return
+
+            fen = " ".join(context.args)
+            board = chess.Board(fen)
+            games[chat_id]["board"] = board
+            await update.message.reply_text("Board synced to provided FEN.")
+
+            # check whose turn and play bot if needed
+            user_color = games[chat_id]["user_color"]
+            engine_side = "black" if user_color=="white" else "white"
+            is_player_turn = (board.turn and user_color=="white") or (not board.turn and user_color=="black")
+            if not is_player_turn:
+                mv, trap_name = get_bot_move(board, engine_side)
+                board.push(mv)
+                await update.message.reply_text(f"{mv.uci()}  ({trap_name})")
+
+        # -----------------------------
+        # Run bot
+        # -----------------------------
+        if __name__ == "__main__":
+            app = ApplicationBuilder().token(TOKEN).build()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("sync", sync))
+            app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_move))
+
+            print("Bot is running...")
+            app.run_polling()
+        EOF
+        
+    - name: Run chess bot
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      run: |
+        python chess_bot.py
