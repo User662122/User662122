@@ -30,15 +30,15 @@ jobs:
             gradle-cache-${{ runner.os }}-
 
       - name: Grant execute permission for Gradle wrapper
-        run: chmod +x ChessChatApp/ChessChatApp/gradlew
+        run: chmod +x narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp/gradlew
 
       - name: Build Debug APK
-        working-directory: ChessChatApp/ChessChatApp
+        working-directory: narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-          path: ChessChatApp/ChessChatApp/app/build/outputs/apk/debug/app-debug.apk
+          path: narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
