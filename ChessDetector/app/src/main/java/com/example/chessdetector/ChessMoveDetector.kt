@@ -114,8 +114,8 @@ object ChessMoveDetector {
 
     private fun sortCorners(pts: MatOfPoint): MatOfPoint2f {
         val points = pts.toArray()
-        val sum = points.map { it.x + it.y }.toDoubleArray()
-        val diff = points.map { it.x - it.y }.toDoubleArray()
+        val sum = points.map { it.x + it.y }
+        val diff = points.map { it.x - it.y }
         
         val topLeft = points[sum.indexOf(sum.minOrNull()!!)]
         val topRight = points[diff.indexOf(diff.minOrNull()!!)]
