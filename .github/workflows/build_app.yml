@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build Chess Detector APK
 
 on:
   push:
@@ -19,8 +19,11 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Cache Gradle
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
@@ -30,15 +33,21 @@ jobs:
             gradle-cache-${{ runner.os }}-
 
       - name: Grant execute permission for Gradle wrapper
-        run: chmod +x narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp/gradlew
+        working-directory: ChessDetector
+        run: chmod +x gradlew
 
       - name: Build Debug APK
-        working-directory: narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp
+        working-directory: ChessDetector
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
-          path: narayan662122-arch-Faluda-255bc12/ChessChatApp/ChessChatApp/app/build/outputs/apk/debug/app-debug.apk
+          name: chess-detector-debug-apk
+          path: ChessDetector/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          
+      - name: Display Build Info
+        run: |
+          echo "✅ Chess Detector APK built successfully!"
+          ls -lh ChessDetector/app/build/outputs/apk/debug/app-debug.apk
