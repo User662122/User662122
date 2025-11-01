@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -20,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
 import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -37,10 +39,20 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            image1Path = getRealPathFromURI(it)
-            selectImage1Button.text = "Image 1: Selected ✓"
-            selectImage1Button.setBackgroundColor(getColor(android.R.color.holo_green_light))
-            checkIfBothImagesSelected()
+            try {
+                image1Path = copyUriToTempFile(it, "image1.jpg")
+                if (image1Path != null) {
+                    selectImage1Button.text = "Image 1: Selected ✓"
+                    selectImage1Button.setBackgroundColor(getColor(android.R.color.holo_green_light))
+                    checkIfBothImagesSelected()
+                    Log.d("MainActivity", "Image 1 saved to: $image1Path")
+                } else {
+                    Toast.makeText(this, "Failed to load Image 1", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error loading image 1", e)
+                Toast.makeText(this, "Error loading Image 1: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -48,10 +60,20 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            image2Path = getRealPathFromURI(it)
-            selectImage2Button.text = "Image 2: Selected ✓"
-            selectImage2Button.setBackgroundColor(getColor(android.R.color.holo_green_light))
-            checkIfBothImagesSelected()
+            try {
+                image2Path = copyUriToTempFile(it, "image2.jpg")
+                if (image2Path != null) {
+                    selectImage2Button.text = "Image 2: Selected ✓"
+                    selectImage2Button.setBackgroundColor(getColor(android.R.color.holo_green_light))
+                    checkIfBothImagesSelected()
+                    Log.d("MainActivity", "Image 2 saved to: $image2Path")
+                } else {
+                    Toast.makeText(this, "Failed to load Image 2", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error loading image 2", e)
+                Toast.makeText(this, "Error loading Image 2: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -61,8 +83,10 @@ class MainActivity : AppCompatActivity() {
 
         if (!OpenCVLoader.initDebug()) {
             Toast.makeText(this, "OpenCV initialization failed!", Toast.LENGTH_LONG).show()
+            Log.e("MainActivity", "OpenCV initialization failed!")
             return
         }
+        Log.d("MainActivity", "OpenCV initialized successfully")
 
         initializeViews()
         checkPermissions()
@@ -96,6 +120,25 @@ class MainActivity : AppCompatActivity() {
         detectMovesButton.isEnabled = image1Path != null && image2Path != null
     }
 
+    private fun copyUriToTempFile(uri: Uri, filename: String): String? {
+        return try {
+            val inputStream = contentResolver.openInputStream(uri) ?: return null
+            val tempFile = File(cacheDir, filename)
+            
+            FileOutputStream(tempFile).use { outputStream ->
+                inputStream.copyTo(outputStream)
+            }
+            inputStream.close()
+            
+            val path = tempFile.absolutePath
+            Log.d("MainActivity", "Image copied to: $path, size: ${tempFile.length()} bytes")
+            path
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error copying URI to file", e)
+            null
+        }
+    }
+
     private fun detectChessMoves() {
         val path1 = image1Path
         val path2 = image2Path
@@ -105,7 +148,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        resultTextView.text = "Processing images..."
+        Log.d("MainActivity", "Starting chess move detection")
+        Log.d("MainActivity", "Image 1: $path1")
+        Log.d("MainActivity", "Image 2: $path2")
+
+        resultTextView.text = "Processing images...\nThis may take a few seconds."
         detectMovesButton.isEnabled = false
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -135,15 +182,27 @@ class MainActivity : AppCompatActivity() {
                                 else -> move
                             }
                         }
-                        resultTextView.text = "Detected Moves:\n\n$formattedMoves"
+                        resultTextView.text = "✓ Detected Moves:\n\n$formattedMoves"
+                        Toast.makeText(this@MainActivity, "Detection successful!", Toast.LENGTH_SHORT).show()
                     } else {
-                        resultTextView.text = "No clear moves detected.\nPlease ensure images show chess boards with clear piece positions."
+                        resultTextView.text = "No clear moves detected.\n\nPossible reasons:\n" +
+                                "• Board not clearly visible\n" +
+                                "• Multiple pieces moved\n" +
+                                "• Pieces not detected correctly\n" +
+                                "• Images too similar or different\n\n" +
+                                "Try using clear, well-lit photos of the chessboard."
+                        Toast.makeText(this@MainActivity, "No moves detected", Toast.LENGTH_SHORT).show()
                     }
                     detectMovesButton.isEnabled = true
                 }
             } catch (e: Exception) {
+                Log.e("MainActivity", "Detection error", e)
                 withContext(Dispatchers.Main) {
-                    resultTextView.text = "Error: ${e.message}"
+                    resultTextView.text = "Error during detection:\n${e.message}\n\n" +
+                            "Please check:\n" +
+                            "• Images are valid chess board photos\n" +
+                            "• Images loaded correctly\n" +
+                            "• Sufficient storage space"
                     detectMovesButton.isEnabled = true
                     Toast.makeText(this@MainActivity, "Detection failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
@@ -151,32 +210,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getRealPathFromURI(uri: Uri): String? {
-        var result: String? = null
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        
-        if (cursor != null) {
-            if (cursor.moveToFirst()) {
-                val columnIndex = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
-                if (columnIndex != -1) {
-                    result = cursor.getString(columnIndex)
-                }
-            }
-            cursor.close()
-        }
-        
-        if (result == null) {
-            result = uri.path
-        }
-        
-        return result
-    }
-
     private fun checkPermissions() {
-        val permissions = arrayOf(
-            Manifest.permission.READ_EXTERNAL_STORAGE,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-        )
+        val permissions = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+        }
 
         val permissionsNeeded = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
