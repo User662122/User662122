@@ -19,8 +19,8 @@ object ChessMoveDetector {
     data class DetectionResult(
         val moves: List<String>,
         val visualizationBitmap: Bitmap?,
-        val board1State: Map<String, Set<String>>?,
-        val board2State: Map<String, Set<String>>?
+        val board1State: Map<String, Any>?,
+        val board2State: Map<String, Any>?
     )
 
     init {
@@ -152,6 +152,17 @@ object ChessMoveDetector {
         return MatOfPoint2f(topLeft, topRight, bottomRight, bottomLeft)
     }
 
+    // ADDED: Validation functions (moved before detectUciMoves)
+    private fun isValidMove(from: String, to: String): Boolean {
+        // Basic validation - positions should be different
+        return from != to
+    }
+
+    private fun isValidCapture(attacker: String, captured: String, newPos: String): Boolean {
+        // In captures, the attacker moves to captured square
+        return attacker != captured && attacker != newPos
+    }
+
     // FIXED: Enhanced piece detection with better thresholds
     private fun detectPiecesOnBoard(
         grayBoard: Mat,
@@ -272,8 +283,8 @@ object ChessMoveDetector {
                 val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && 
                         innerStd < 25 && absBrightness > 180)
 
-                // FIXED: More conservative detection logic
-                if (edgeCount >= curEdge_thresh) {
+                // FIXED: More conservative detection logic (fixed variable name)
+                if (edgeCount >= curEdgeThresh) {
                     if (!isSmallBrightSpot) {
                         pieceDetected = true
                         colorIsWhite = (diff > 0) || isVeryBright
@@ -387,7 +398,7 @@ object ChessMoveDetector {
         return bitmap
     }
 
-    fun getBoardState(imgPath: String, boardName: String): Map<String, Set<String>>? {
+    fun getBoardState(imgPath: String, boardName: String): Map<String, Any>? {
         Log.d("ChessDetector", "--- Processing $boardName ---")
         var img = Imgcodecs.imread(imgPath)
         if (img.empty()) {
@@ -512,4 +523,67 @@ object ChessMoveDetector {
 
         // FIXED: Better capture detection
         if (whiteMoved.size == 1 && blackMoved.size == 1 && whiteAppeared.isEmpty() && blackAppeared.size == 1) {
+            val whiteSource = whiteMoved.first()
+            val blackCaptured = blackMoved.first()
+            val blackNew = blackAppeared.first()
+            if (isValidCapture(whiteSource, blackCaptured, blackNew)) {
+                moves.add("White captured ${whiteSource}${blackCaptured}")
+            }
+        }
+
+        if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty() && whiteAppeared.size == 1) {
+            val blackSource = blackMoved.first()
+            val whiteCaptured = whiteMoved.first()
+            val whiteNew = whiteAppeared.first()
+            if (isValidCapture(blackSource, whiteCaptured, whiteNew)) {
+                moves.add("Black captured ${blackSource}${whiteCaptured}")
+            }
+        }
+
+        if (moves.isNotEmpty()) {
+            Log.d("ChessDetector", "🎯 DETECTED MOVES:")
+            moves.forEach { Log.d("ChessDetector", "   $it") }
+        } else {
+            Log.d("ChessDetector", "❌ No clear moves detected")
+            Log.d("ChessDetector", "   White changes: ${whiteMoved.sorted()} -> ${whiteAppeared.sorted()}")
+            Log.d("ChessDetector", "   Black changes: ${blackMoved.sorted()} -> ${blackAppeared.sorted()}")
+        }
+
+        return moves
+    }
+
+    // CHANGED: Returns both moves and visualization
+    fun compareBoardsAndDetectMoves(board1Path: String, board2Path: String): DetectionResult {
+        Log.d("ChessDetector", "♟️ CHESS MOVE DETECTOR ♟️")
+        Log.d("ChessDetector", "Sensitivity: White=$WHITE_DETECTION_SENSITIVITY, Black=$BLACK_DETECTION_SENSITIVITY, Empty=$EMPTY_DETECTION_SENSITIVITY")
+
+        val state1 = getBoardState(board1Path, "First Board")
+        val state2 = getBoardState(board2Path, "Second Board")
+
+        return if (state1 != null && state2 != null) {
+            val moves = detectUciMoves(state1, state2)
             
+            // Create visualization of the second board
+            val boardWarped = state2["boardWarped"] as? Mat
+            val whiteSquares = state2["white"] as? Set<String> ?: emptySet()
+            val blackSquares = state2["black"] as? Set<String> ?: emptySet()
+            val files = state2["files"] as? String ?: "abcdefgh"
+            val ranks = state2["ranks"] as? String ?: "87654321"
+            val cellSize = state2["cellSize"] as? Int ?: 100
+            
+            val visualization = if (boardWarped != null) {
+                createVisualization(boardWarped, whiteSquares, blackSquares, files, ranks, cellSize)
+            } else {
+                null
+            }
+            
+            // Release the boardWarped mat
+            boardWarped?.release()
+            
+            DetectionResult(moves, visualization, state1, state2)
+        } else {
+            Log.e("ChessDetector", "❌ Failed to process one or both boards")
+            DetectionResult(emptyList(), null, null, null)
+        }
+    }
+}
