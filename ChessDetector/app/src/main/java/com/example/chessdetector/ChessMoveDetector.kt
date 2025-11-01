@@ -36,10 +36,12 @@ object ChessMoveDetector {
         val orig = img.clone()
         val gray = Mat()
         Imgproc.cvtColor(img, gray, Imgproc.COLOR_BGR2GRAY)
-        Imgproc.bilateralFilter(gray, gray, 11, 17.0, 17.0)
+        val filtered = Mat()
+        Imgproc.bilateralFilter(gray, filtered, 11, 17.0, 17.0)
+        gray.release()
         
         val edges = Mat()
-        Imgproc.Canny(gray, edges, 40.0, 150.0)
+        Imgproc.Canny(filtered, edges, 40.0, 150.0)
         
         val kernel = Mat()
         Imgproc.dilate(edges, edges, kernel, Point(-1.0, -1.0), 2)
@@ -92,7 +94,7 @@ object ChessMoveDetector {
             Imgproc.polylines(imgShow, listOf(innerPts!!), true, Scalar(0.0, 0.0, 255.0), 8)
         }
 
-        gray.release()
+        filtered.release()
         edges.release()
         kernel.release()
         hierarchy.release()
@@ -279,13 +281,13 @@ object ChessMoveDetector {
         Log.d("ChessDetector", "--- Processing $boardName ---")
         val img = Imgcodecs.imread(imgPath)
         if (img.empty()) {
-            Log.e("ChessDetector", "❌ Could not load $imgPath")
+            Log.e("ChessDetector", "âŒ Could not load $imgPath")
             return null
         }
 
         val (detectedImg, innerPts) = detectLargestSquareLike(img)
         if (innerPts == null) {
-            Log.e("ChessDetector", "❌ No board found")
+            Log.e("ChessDetector", "âŒ No board found")
             return null
         }
 
@@ -324,7 +326,7 @@ object ChessMoveDetector {
         Imgproc.cvtColor(boardWarped, grayBoard, Imgproc.COLOR_BGR2GRAY)
 
         val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
-        Log.d("ChessDetector", "✅ $boardName: ${whiteSquares.size} white, ${blackSquares.size} black pieces")
+        Log.d("ChessDetector", "âœ… $boardName: ${whiteSquares.size} white, ${blackSquares.size} black pieces")
 
         detectedImg.release()
         boardWarped.release()
@@ -342,7 +344,7 @@ object ChessMoveDetector {
 
     fun detectUciMoves(state1: Map<String, Set<String>>?, state2: Map<String, Set<String>>?): List<String> {
         if (state1 == null || state2 == null) {
-            Log.e("ChessDetector", "❌ One or both board states are null")
+            Log.e("ChessDetector", "âŒ One or both board states are null")
             return emptyList()
         }
 
@@ -383,10 +385,10 @@ object ChessMoveDetector {
         }
 
         if (moves.isNotEmpty()) {
-            Log.d("ChessDetector", "🎯 DETECTED MOVES:")
+            Log.d("ChessDetector", "ðŸŽ¯ DETECTED MOVES:")
             moves.forEach { Log.d("ChessDetector", "   $it") }
         } else {
-            Log.d("ChessDetector", "❌ No clear moves detected")
+            Log.d("ChessDetector", "âŒ No clear moves detected")
             Log.d("ChessDetector", "   White changes: ${whiteMoved.sorted()} -> ${whiteAppeared.sorted()}")
             Log.d("ChessDetector", "   Black changes: ${blackMoved.sorted()} -> ${blackAppeared.sorted()}")
         }
@@ -395,7 +397,7 @@ object ChessMoveDetector {
     }
 
     fun compareBoardsAndDetectMoves(board1Path: String, board2Path: String): List<String> {
-        Log.d("ChessDetector", "♟️ CHESS MOVE DETECTOR ♟️")
+        Log.d("ChessDetector", "â™Ÿï¸ CHESS MOVE DETECTOR â™Ÿï¸")
         Log.d("ChessDetector", "Sensitivity: White=$WHITE_DETECTION_SENSITIVITY, Black=$BLACK_DETECTION_SENSITIVITY, Empty=$EMPTY_DETECTION_SENSITIVITY")
 
         val state1 = getBoardState(board1Path, "First Board")
@@ -404,7 +406,7 @@ object ChessMoveDetector {
         return if (state1 != null && state2 != null) {
             detectUciMoves(state1, state2)
         } else {
-            Log.e("ChessDetector", "❌ Failed to process one or both boards")
+            Log.e("ChessDetector", "âŒ Failed to process one or both boards")
             emptyList()
         }
     }
