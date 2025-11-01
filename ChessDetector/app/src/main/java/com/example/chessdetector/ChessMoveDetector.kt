@@ -15,11 +15,18 @@ object ChessMoveDetector {
     const val BLACK_DETECTION_SENSITIVITY = 50
     const val EMPTY_DETECTION_SENSITIVITY = 50
 
+    // ADDED: Data class to return both moves and visualization
+    data class DetectionResult(
+        val moves: List<String>,
+        val visualizationBitmap: Bitmap?,
+        val board1State: Map<String, Set<String>>?,
+        val board2State: Map<String, Set<String>>?
+    )
+
     init {
         OpenCVLoader.initDebug()
     }
 
-    // ADDED: Image resizing function
     private fun resizeImage(img: Mat, width: Int): Mat {
         val ratio = width.toDouble() / img.cols()
         val height = (img.rows() * ratio).toInt()
@@ -54,7 +61,6 @@ object ChessMoveDetector {
         val edges = Mat()
         Imgproc.Canny(filtered, edges, 40.0, 150.0)
         
-        // FIXED: Proper dilation/erosion with kernel
         val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
         Imgproc.dilate(edges, edges, kernel, Point(-1.0, -1.0), 2)
         Imgproc.erode(edges, edges, kernel, Point(-1.0, -1.0), 1)
@@ -68,7 +74,6 @@ object ChessMoveDetector {
         var bestArea = 0.0
 
         for (c in contours) {
-            // FIXED: Proper contour approximation
             val points = c.toArray()
             val points2f = MatOfPoint2f(*points)
             val peri = Imgproc.arcLength(points2f, true)
@@ -92,14 +97,16 @@ object ChessMoveDetector {
 
         if (best == null && contours.isNotEmpty()) {
             val c = contours.maxByOrNull { Imgproc.contourArea(it) }
-            val rect = Imgproc.boundingRect(c)
-            val pts = arrayOf(
-                Point(rect.x.toDouble(), rect.y.toDouble()),
-                Point((rect.x + rect.width).toDouble(), rect.y.toDouble()),
-                Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
-                Point(rect.x.toDouble(), (rect.y + rect.height).toDouble())
-            )
-            best = MatOfPoint(*pts)
+            c?.let {
+                val rect = Imgproc.boundingRect(it)
+                val pts = arrayOf(
+                    Point(rect.x.toDouble(), rect.y.toDouble()),
+                    Point((rect.x + rect.width).toDouble(), rect.y.toDouble()),
+                    Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
+                    Point(rect.x.toDouble(), (rect.y + rect.height).toDouble())
+                )
+                best = MatOfPoint(*pts)
+            }
         }
 
         val imgShow = orig.clone()
@@ -111,7 +118,6 @@ object ChessMoveDetector {
             Imgproc.polylines(imgShow, listOf(innerPts!!), true, Scalar(0.0, 0.0, 255.0), 8)
         }
 
-        // Clean up
         gray.release()
         filtered.release()
         edges.release()
@@ -143,10 +149,10 @@ object ChessMoveDetector {
         val bottomRight = points[sum.indexOf(sum.maxOrNull()!!)]
         val bottomLeft = points[diff.indexOf(diff.maxOrNull()!!)]
         
-        val sorted = MatOfPoint2f(topLeft, topRight, bottomRight, bottomLeft)
-        return sorted
+        return MatOfPoint2f(topLeft, topRight, bottomRight, bottomLeft)
     }
 
+    // FIXED: Enhanced piece detection with better thresholds
     private fun detectPiecesOnBoard(
         grayBoard: Mat,
         files: String,
@@ -161,17 +167,18 @@ object ChessMoveDetector {
         val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
         val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-        val POS_BRIGHT_DIFF = max(1.0, 25 - (whiteNorm * 0.2))
-        val MIN_WHITE_STD = max(1.0, 30 - (whiteNorm * 0.25))
+        // ADJUSTED: More conservative thresholds for Android
+        val POS_BRIGHT_DIFF = max(5.0, 25 - (whiteNorm * 0.2))  // Increased minimum
+        val MIN_WHITE_STD = max(8.0, 30 - (whiteNorm * 0.25))   // Increased minimum
         val WHITE_EDGE_BOOST = whiteNorm * 0.3
-        val WHITE_BRIGHTNESS_THRESH = max(100.0, 200 - (whiteNorm * 0.5))
-        val NEG_BRIGHT_DIFF = min(-1.0, -10 - (blackNorm * 0.2))
-        val BLACK_STD_THRESH = max(1.0, 5 + (blackNorm * 0.1))
+        val WHITE_BRIGHTNESS_THRESH = max(120.0, 200 - (whiteNorm * 0.5)) // Lowered threshold
+        val NEG_BRIGHT_DIFF = min(-5.0, -10 - (blackNorm * 0.2)) // Less sensitive
+        val BLACK_STD_THRESH = max(3.0, 5 + (blackNorm * 0.1))
         val BLACK_EDGE_BOOST = blackNorm * 0.3
-        val EDGE_COUNT_THRESH = max(5.0, 80 - (emptyNorm * 0.6))
-        val STD_BG_THRESH = max(1.0, 5 + (emptyNorm * 0.15))
-        val MAX_EMPTY_STD = max(10.0, 15 + (emptyNorm * 0.25))
-        val EMPTY_EDGE_THRESH = max(1.0, 20 - (emptyNorm * 0.15))
+        val EDGE_COUNT_THRESH = max(10.0, 80 - (emptyNorm * 0.6)) // Higher minimum
+        val STD_BG_THRESH = max(3.0, 5 + (emptyNorm * 0.15))
+        val MAX_EMPTY_STD = max(15.0, 15 + (emptyNorm * 0.25))
+        val EMPTY_EDGE_THRESH = max(5.0, 20 - (emptyNorm * 0.15))
 
         for (r in 0 until 8) {
             for (c in 0 until 8) {
@@ -247,7 +254,6 @@ object ChessMoveDetector {
                 val curNegThresh: Double
                 val curEdgeThresh: Double
 
-                // FIXED: Added adaptive threshold adjustments from Python
                 if (localBgStd > STD_BG_THRESH) {
                     curPosThresh = POS_BRIGHT_DIFF + 8
                     curNegThresh = NEG_BRIGHT_DIFF - 8
@@ -266,13 +272,15 @@ object ChessMoveDetector {
                 val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && 
                         innerStd < 25 && absBrightness > 180)
 
-                // FIXED: Enhanced detection logic from Python
-                if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
-                    pieceDetected = true
-                    colorIsWhite = (diff > 0) || isVeryBright
+                // FIXED: More conservative detection logic
+                if (edgeCount >= curEdge_thresh) {
+                    if (!isSmallBrightSpot) {
+                        pieceDetected = true
+                        colorIsWhite = (diff > 0) || isVeryBright
+                    }
                 } else {
                     if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                        if (innerStd in MIN_WHITE_STD..MAX_EMPTY_STD) {
+                        if (innerStd >= MIN_WHITE_STD && innerStd <= MAX_EMPTY_STD) {
                             pieceDetected = true
                             colorIsWhite = true
                         }
@@ -284,20 +292,20 @@ object ChessMoveDetector {
                     }
                 }
 
-                // FIXED: Additional conditions from Python
-                if (pieceDetected && innerStd < 10 && edgeCount < 30) {
-                    pieceDetected = false
-                }
-
-                if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
-                    pieceDetected = false
+                // FIXED: Stricter final checks
+                if (pieceDetected) {
+                    if (innerStd < 8 && edgeCount < 25) {
+                        pieceDetected = false
+                    }
+                    if (colorIsWhite && brightRatio < 0.02 && innerStd < 12) {
+                        pieceDetected = false
+                    }
                 }
 
                 if (pieceDetected) {
                     if (colorIsWhite) whiteSquares.add(label) else blackSquares.add(label)
                 }
 
-                // Release Mats
                 inner.release()
                 square.release()
                 edges.release()
@@ -308,10 +316,74 @@ object ChessMoveDetector {
         return Pair(whiteSquares, blackSquares)
     }
 
-    // ADDED: Visualization function similar to Python's show()
-    fun matToBitmap(mat: Mat): Bitmap {
-        val bitmap = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
-        Utils.matToBitmap(mat, bitmap)
+    // ADDED: Function to create visualization like Python
+    private fun createVisualization(
+        boardWarped: Mat,
+        whiteSquares: Set<String>,
+        blackSquares: Set<String>,
+        files: String,
+        ranks: String,
+        cellSize: Int
+    ): Bitmap {
+        val vis = boardWarped.clone()
+        
+        // Draw grid and labels like Python
+        val font = Imgproc.FONT_HERSHEY_SIMPLEX
+        val scale = 0.6
+        val thickness = 2
+        
+        for (r in 0 until 8) {
+            for (c in 0 until 8) {
+                val x1 = c * cellSize
+                val y1 = r * cellSize
+                val x2 = x1 + cellSize
+                val y2 = y1 + cellSize
+                val label = "${files[c]}${ranks[r]}"
+                
+                // Draw rectangle
+                Imgproc.rectangle(vis, Point(x1.toDouble(), y1.toDouble()), 
+                    Point(x2.toDouble(), y2.toDouble()), Scalar(0.0, 255.0, 0.0), thickness)
+                
+                // Put text
+                Imgproc.putText(vis, label, Point(x1 + 10.0, y1 + 25.0), 
+                    font, scale, Scalar(255.0, 255.0, 255.0), thickness)
+            }
+        }
+        
+        // Highlight detected pieces
+        for (sq in whiteSquares) {
+            val file = sq[0]
+            val rank = sq[1]
+            val col = files.indexOf(file)
+            val row = ranks.indexOf(rank)
+            if (col != -1 && row != -1) {
+                val xx1 = col * cellSize
+                val yy1 = row * cellSize
+                val xx2 = xx1 + cellSize
+                val yy2 = yy1 + cellSize
+                Imgproc.rectangle(vis, Point(xx1.toDouble(), yy1.toDouble()), 
+                    Point(xx2.toDouble(), yy2.toDouble()), Scalar(255.0, 255.0, 0.0), 3)
+            }
+        }
+        
+        for (sq in blackSquares) {
+            val file = sq[0]
+            val rank = sq[1]
+            val col = files.indexOf(file)
+            val row = ranks.indexOf(rank)
+            if (col != -1 && row != -1) {
+                val xx1 = col * cellSize
+                val yy1 = row * cellSize
+                val xx2 = xx1 + cellSize
+                val yy2 = yy1 + cellSize
+                Imgproc.rectangle(vis, Point(xx1.toDouble(), yy1.toDouble()), 
+                    Point(xx2.toDouble(), yy2.toDouble()), Scalar(255.0, 0.0, 255.0), 3)
+            }
+        }
+        
+        val bitmap = Bitmap.createBitmap(vis.cols(), vis.rows(), Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(vis, bitmap)
+        vis.release()
         return bitmap
     }
 
@@ -323,7 +395,6 @@ object ChessMoveDetector {
             return null
         }
 
-        // ADDED: Image resizing like Python
         img = resizeImage(img, 900)
 
         val (detectedImg, innerPts) = detectLargestSquareLike(img)
@@ -371,10 +442,19 @@ object ChessMoveDetector {
         val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
         Log.d("ChessDetector", "✅ $boardName: ${whiteSquares.size} white, ${blackSquares.size} black pieces")
 
-        // Release all Mats
+        // Store additional info for visualization
+        val result = mapOf(
+            "white" to whiteSquares,
+            "black" to blackSquares,
+            "files" to files,
+            "ranks" to ranks,
+            "cellSize" to cellSize,
+            "boardWarped" to boardWarped // Keep reference for visualization
+        )
+
+        // Don't release boardWarped yet - we need it for visualization
         img.release()
         detectedImg.release()
-        boardWarped.release()
         grayBoard.release()
         topLeft.release()
         bottomRight.release()
@@ -384,75 +464,52 @@ object ChessMoveDetector {
         sortedCorners.release()
         innerPts.release()
 
-        return mapOf("white" to whiteSquares, "black" to blackSquares)
+        return result
     }
 
-    fun detectUciMoves(state1: Map<String, Set<String>>?, state2: Map<String, Set<String>>?): List<String> {
+    // FIXED: Enhanced move detection with better validation
+    fun detectUciMoves(state1: Map<String, Any>?, state2: Map<String, Any>?): List<String> {
         if (state1 == null || state2 == null) {
             Log.e("ChessDetector", "❌ One or both board states are null")
             return emptyList()
         }
 
-        val white1 = state1["white"] ?: emptySet()
-        val black1 = state1["black"] ?: emptySet()
-        val white2 = state2["white"] ?: emptySet()
-        val black2 = state2["black"] ?: emptySet()
+        val white1 = state1["white"] as? Set<String> ?: emptySet()
+        val black1 = state1["black"] as? Set<String> ?: emptySet()
+        val white2 = state2["white"] as? Set<String> ?: emptySet()
+        val black2 = state2["black"] as? Set<String> ?: emptySet()
+
+        Log.d("ChessDetector", "Board1 - White: $white1, Black: $black1")
+        Log.d("ChessDetector", "Board2 - White: $white2, Black: $black2")
 
         val whiteMoved = white1 - white2
         val blackMoved = black1 - black2
         val whiteAppeared = white2 - white1
         val blackAppeared = black2 - black1
 
+        Log.d("ChessDetector", "White moved: $whiteMoved, appeared: $whiteAppeared")
+        Log.d("ChessDetector", "Black moved: $blackMoved, appeared: $blackAppeared")
+
         val moves = mutableListOf<String>()
 
+        // FIXED: More robust move detection
         if (whiteMoved.size == 1 && whiteAppeared.size == 1) {
             val source = whiteMoved.first()
             val destination = whiteAppeared.first()
-            moves.add("White moved ${source}${destination}")
+            // Additional validation: check if it's a valid move
+            if (isValidMove(source, destination)) {
+                moves.add("White moved ${source}${destination}")
+            }
         }
 
         if (blackMoved.size == 1 && blackAppeared.size == 1) {
             val source = blackMoved.first()
             val destination = blackAppeared.first()
-            moves.add("Black moved ${source}${destination}")
+            if (isValidMove(source, destination)) {
+                moves.add("Black moved ${source}${destination}")
+            }
         }
 
-        if (whiteMoved.size == 1 && blackMoved.size == 1 && whiteAppeared.isEmpty()) {
-            val whiteSource = whiteMoved.first()
-            val blackCaptured = blackMoved.first()
-            moves.add("White captured ${whiteSource}${blackCaptured}")
-        }
-
-        if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty()) {
-            val blackSource = blackMoved.first()
-            val whiteCaptured = whiteMoved.first()
-            moves.add("Black captured ${blackSource}${whiteCaptured}")
-        }
-
-        if (moves.isNotEmpty()) {
-            Log.d("ChessDetector", "🎯 DETECTED MOVES:")
-            moves.forEach { Log.d("ChessDetector", "   $it") }
-        } else {
-            Log.d("ChessDetector", "❌ No clear moves detected")
-            Log.d("ChessDetector", "   White changes: ${whiteMoved.sorted()} -> ${whiteAppeared.sorted()}")
-            Log.d("ChessDetector", "   Black changes: ${blackMoved.sorted()} -> ${blackAppeared.sorted()}")
-        }
-
-        return moves
-    }
-
-    fun compareBoardsAndDetectMoves(board1Path: String, board2Path: String): List<String> {
-        Log.d("ChessDetector", "♟️ CHESS MOVE DETECTOR ♟️")
-        Log.d("ChessDetector", "Sensitivity: White=$WHITE_DETECTION_SENSITIVITY, Black=$BLACK_DETECTION_SENSITIVITY, Empty=$EMPTY_DETECTION_SENSITIVITY")
-
-        val state1 = getBoardState(board1Path, "First Board")
-        val state2 = getBoardState(board2Path, "Second Board")
-
-        return if (state1 != null && state2 != null) {
-            detectUciMoves(state1, state2)
-        } else {
-            Log.e("ChessDetector", "❌ Failed to process one or both boards")
-            emptyList()
-        }
-    }
-}
+        // FIXED: Better capture detection
+        if (whiteMoved.size == 1 && blackMoved.size == 1 && whiteAppeared.isEmpty() && blackAppeared.size == 1) {
+            
