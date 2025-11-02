@@ -32,14 +32,6 @@ class MainActivity : AppCompatActivity() {
     
     companion object {
         private const val TAG = "ChessMoveDetector"
-        
-        init {
-            if (OpenCVLoader.initLocal()) {
-                Log.i(TAG, "OpenCV loaded successfully")
-            } else {
-                Log.e(TAG, "OpenCV initialization failed!")
-            }
-        }
     }
     
     private val pickImageLauncher = registerForActivityResult(
@@ -64,6 +56,18 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        
+        if (OpenCVLoader.initDebug()) {
+            Log.i(TAG, "OpenCV loaded successfully with initDebug()")
+        } else {
+            Log.w(TAG, "OpenCV initDebug() failed, trying initLocal()")
+            if (OpenCVLoader.initLocal()) {
+                Log.i(TAG, "OpenCV loaded successfully with initLocal()")
+            } else {
+                Log.e(TAG, "OpenCV initialization failed!")
+                Toast.makeText(this, "OpenCV initialization failed", Toast.LENGTH_LONG).show()
+            }
+        }
         
         binding.selectImage1Button.setOnClickListener {
             selectingImageNumber = 1
