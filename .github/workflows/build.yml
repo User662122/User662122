@@ -24,9 +24,10 @@ jobs:
     - name: Download OpenCV Android SDK
       run: |
         wget https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-android-sdk.zip
-        unzip opencv-4.10.0-android-sdk.zip
+        unzip opencv-4.10.0-android-sdk.zip -d opencv-sdk
         mkdir -p chess_detector/app/libs
-        cp OpenCV-android-sdk/sdk/java/maven/org/opencv/opencv-android/4.10.0/opencv-android-4.10.0.aar chess_detector/app/libs/opencv-4.10.0.aar
+        find opencv-sdk -name "*.aar" -type f
+        cp opencv-sdk/OpenCV-android-sdk/sdk/*.aar chess_detector/app/libs/opencv-4.10.0.aar
         rm opencv-4.10.0-android-sdk.zip
 
     - name: Grant execute permission for gradlew
