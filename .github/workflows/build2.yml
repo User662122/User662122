@@ -15,22 +15,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Step 1: Set up Java environment
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
+        cache: 'gradle'
 
-    # Step 3: Allow gradlew to execute
     - name: Grant execute permission for gradlew
       run: chmod +x chess_detector/gradlew
 
-    # Step 4: Build APK
     - name: Build Debug APK
-      run: cd chess_detector && ./gradlew assembleDebug
+      run: cd chess_detector && ./gradlew assembleDebug --stacktrace
 
-    # Step 5: Upload built APK as artifact
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
