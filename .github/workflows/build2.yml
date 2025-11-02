@@ -12,10 +12,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code (with LFS)
+    - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        lfs: true   # ✅ This ensures the .aar file in app/libs is fetched properly
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -24,13 +22,17 @@ jobs:
         distribution: 'temurin'
         cache: 'gradle'
 
+    - name: Download OpenCV AAR
+      run: |
+        mkdir -p chess_detector/app/libs
+        cd chess_detector/app/libs
+        wget -O opencv-4.10.0.aar https://repo1.maven.org/maven2/org/opencv/opencv/4.10.0/opencv-4.10.0.aar
+
     - name: Grant execute permission for gradlew
       run: chmod +x chess_detector/gradlew
 
     - name: Build Debug APK
-      run: |
-        cd chess_detector
-        ./gradlew assembleDebug --no-daemon --stacktrace
+      run: cd chess_detector && ./gradlew assembleDebug --stacktrace
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
