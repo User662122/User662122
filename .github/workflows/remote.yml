@@ -1,0 +1,73 @@
+name: Remote Kotlin Runner (Windows + ngrok + Flask)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run_kotlin_server:
+    runs-on: windows-latest
+    timeout-minutes: 240  # 4 hours
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flask pillow requests
+
+      - name: Download ngrok (Windows)
+        run: |
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip" -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath .
+        shell: powershell
+
+      - name: Configure ngrok auth token (placeholder)
+        run: |
+          # Replace the placeholder with your actual token if you want to hardcode
+          .\ngrok.exe authtoken "31TWswIKgSWHAfejOFT6s8mcW69_4UCxySRXzy6Si8mDHn9zn"
+        shell: powershell
+
+      - name: Download Kotlin compiler (Windows)
+        run: |
+          # Download Kotlin compiler and unzip
+          Invoke-WebRequest -Uri "https://github.com/JetBrains/kotlin/releases/download/v1.9.10/kotlin-compiler-1.9.10.zip" -OutFile kotlinc.zip
+          Expand-Archive kotlinc.zip -DestinationPath kotlinc
+          $env:PATH += ";" + (Resolve-Path "kotlinc\kotlinc\bin")
+          # persist PATH for subsequent steps in this job
+          echo "KOTLINC_BIN=$(Resolve-Path 'kotlinc\kotlinc\bin')" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Start Flask server and ngrok (background)
+        run: |
+          # start flask server (server.py must be at repo root)
+          Start-Process -FilePath python -ArgumentList "server.py" -WindowStyle Hidden
+
+          # start ngrok and create http tunnel to port 5000
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 5000 --log=stdout" -WindowStyle Hidden
+
+          # wait for ngrok to initialize
+          Start-Sleep -Seconds 6
+
+          # print tunnel info (ngrok local API is at 4040)
+          $tunnels = Invoke-RestMethod -Method Get -Uri http://127.0.0.1:4040/api/tunnels
+          Write-Host "Ngrok tunnels:"
+          $tunnels.tunnels | ForEach-Object { Write-Host $_.public_url }
+
+          # show instruction (public URL printed to logs)
+          Write-Host "Server started. Keep this job running up to 4 hours. Use the above ngrok URL from Colab."
+        shell: powershell
+
+      - name: Keep job alive (4 hours max)
+        run: |
+          $end = (Get-Date).AddHours(4)
+          while((Get-Date) -lt $end) {
+            Start-Sleep -Seconds 5
+          }
+        shell: powershell
