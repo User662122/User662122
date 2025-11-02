@@ -15,7 +15,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Step 1: Download and unpack OpenCV Android SDK (prebuilt AAR)
+    # Step 1: Download and unpack OpenCV Android SDK (official prebuilt AAR)
     - name: Download OpenCV Android SDK
       run: |
         sudo apt-get update
@@ -25,18 +25,22 @@ jobs:
         unzip opencv.zip -d opencv-sdk
         cp opencv-sdk/OpenCV-android-sdk/sdk/java/*.aar chess_detector/app/libs/opencv-android.aar
 
+    # Step 2: Set up Java environment
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
 
+    # Step 3: Allow gradlew to execute
     - name: Grant execute permission for gradlew
       run: chmod +x chess_detector/gradlew
 
+    # Step 4: Build APK
     - name: Build Debug APK
       run: cd chess_detector && ./gradlew assembleDebug
 
+    # Step 5: Upload built APK as artifact
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
