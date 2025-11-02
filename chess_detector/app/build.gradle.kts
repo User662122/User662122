@@ -51,8 +51,8 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.activity:activity-ktx:1.8.2")
 
-    // ✅ OpenCV .aar from libs folder (GitHub Action output)
-    implementation(files("libs/opencv-4.10.0.aar"))
+    // ✅ OpenCV from Maven Central (official release)
+    implementation("org.opencv:opencv:4.10.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
