@@ -60,7 +60,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.8.2")
 
     // ✅ Local OpenCV AAR (app/libs/opencv-4.10.0.aar)
-    implementation(name = "opencv-4.10.0", ext = "aar")
+    implementation(files("libs/opencv-4.10.0.aar"))
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
