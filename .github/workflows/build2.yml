@@ -12,8 +12,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
+    - name: Checkout code (with LFS)
       uses: actions/checkout@v4
+      with:
+        lfs: true   # ✅ This ensures the .aar file in app/libs is fetched properly
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -26,7 +28,9 @@ jobs:
       run: chmod +x chess_detector/gradlew
 
     - name: Build Debug APK
-      run: cd chess_detector && ./gradlew assembleDebug --stacktrace
+      run: |
+        cd chess_detector
+        ./gradlew assembleDebug --no-daemon --stacktrace
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
