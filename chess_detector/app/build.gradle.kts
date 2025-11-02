@@ -13,7 +13,6 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -44,6 +43,15 @@ android {
     }
 }
 
+repositories {
+    google()
+    mavenCentral()
+    // 👇 Local .aar folder ke liye
+    flatDir {
+        dirs("libs")
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
@@ -51,7 +59,8 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.activity:activity-ktx:1.8.2")
 
-    implementation("org.opencv:opencv:4.10.0")
+    // ✅ Local OpenCV AAR (app/libs/opencv-4.10.0.aar)
+    implementation(name = "opencv-4.10.0", ext = "aar")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
