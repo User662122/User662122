@@ -8,8 +8,8 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 
-var WHITE_DETECTION_SENSITIVITY = 95
-var BLACK_DETECTION_SENSITIVITY = 50
+var WHITE_DETECTION_SENSITIVITY = 120
+var BLACK_DETECTION_SENSITIVITY = 20
 var EMPTY_DETECTION_SENSITIVITY = 50
 
 data class BoardState(
