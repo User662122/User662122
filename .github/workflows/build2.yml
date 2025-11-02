@@ -23,7 +23,9 @@ jobs:
         mkdir -p chess_detector/app/libs
         wget -O opencv.zip https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-android-sdk.zip
         unzip opencv.zip -d opencv-sdk
-        cp opencv-sdk/OpenCV-android-sdk/sdk/java/*.aar chess_detector/app/libs/opencv-android.aar
+        find opencv-sdk -name "*.aar" -type f
+        cp opencv-sdk/OpenCV-android-sdk/sdk/*.aar chess_detector/app/libs/opencv-4.10.0.aar
+        ls -lh chess_detector/app/libs/
 
     # Step 2: Set up Java environment
     - name: Set up JDK 17
