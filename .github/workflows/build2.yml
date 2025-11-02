@@ -15,19 +15,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Step 1: Download and unpack OpenCV Android SDK (official prebuilt AAR)
-    - name: Download OpenCV Android SDK
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y unzip wget
-        mkdir -p chess_detector/app/libs
-        wget -O opencv.zip https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-android-sdk.zip
-        unzip opencv.zip -d opencv-sdk
-        find opencv-sdk -name "*.aar" -type f
-        cp opencv-sdk/OpenCV-android-sdk/sdk/*.aar chess_detector/app/libs/opencv-4.10.0.aar
-        ls -lh chess_detector/app/libs/
-
-    # Step 2: Set up Java environment
+    # Step 1: Set up Java environment
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
