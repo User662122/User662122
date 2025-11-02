@@ -3,6 +3,9 @@ name: Move all files into chess_detector folder
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  # important! allows pushing changes
+
 jobs:
   move_files:
     runs-on: ubuntu-latest
@@ -10,6 +13,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # we'll set our own token
+          fetch-depth: 0
 
       - name: Move all files except .github/workflows
         shell: bash
@@ -17,10 +23,8 @@ jobs:
           set -e
           mkdir chess_detector
           shopt -s extglob dotglob
-          # Move everything except .github and the new folder itself
-          mv !(chess_detector|.github) chess_detector/ 2>/dev/null || true
+          mv !(chess_detector|.github|.git) chess_detector/ 2>/dev/null || true
 
-          # Move .github contents except workflows
           mkdir -p chess_detector/.github
           if [ -d ".github" ]; then
             cd .github
@@ -29,16 +33,12 @@ jobs:
           fi
 
       - name: Commit and push changes
-        working-directory: ${{ github.workspace }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git init
-          git remote add origin https://github.com/${{ github.repository }}.git
-          git fetch origin ${{ github.ref_name }}
-          git checkout -b temp-branch || git checkout ${{ github.ref_name }}
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add .
           git commit -m "Moved all files into chess_detector folder (keeping .github/workflows as is)" || echo "No changes to commit"
-          git push origin HEAD:${{ github.ref_name }}
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
