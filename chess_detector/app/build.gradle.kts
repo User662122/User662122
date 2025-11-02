@@ -50,8 +50,9 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.activity:activity-ktx:1.8.2")
-    
-    implementation("org.opencv:opencv-android:4.10.0")
+   
+
+implementation('org.opencv:opencv-android:4.10.0')
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     
