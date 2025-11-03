@@ -98,6 +98,12 @@ fun detectLargestSquareLike(img: Mat): Pair<Mat, MatOfPoint?> {
         }
     }
 
+    // release temporaries
+    gray.release()
+    filtered.release()
+    edges.release()
+    hierarchy.release()
+
     return Pair(imgShow, innerPts)
 }
 
@@ -110,9 +116,12 @@ fun normalizeSensitivity(sensitivity: Int): Double {
 }
 
 /**
- * NOTE: detectPiecesOnBoard now accepts the BGR board (boardBgr).
- * It internally converts to gray for intensity-based checks, but also
- * computes a green mask from HSV to ignore green overlays (highlights).
+ * detectPiecesOnBoard:
+ * - Accepts BGR warped board.
+ * - Normalizes grayscale for even brightness.
+ * - Builds an HSV green mask but instead of skipping small green marks,
+ *   it ignores green pixels in statistics and neutralizes them before edge detection.
+ * - Only skips the square if green covers a very large fraction.
  */
 fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: Int): Pair<List<String>, List<String>> {
     val whiteSquares = mutableListOf<String>()
@@ -122,13 +131,18 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
     val grayBoard = Mat()
     Imgproc.cvtColor(boardBgr, grayBoard, Imgproc.COLOR_BGR2GRAY)
 
+    // Normalize to reduce lighting variations (helps detection)
+    val grayNorm = Mat()
+    Core.normalize(grayBoard, grayNorm, 0.0, 255.0, Core.NORM_MINMAX)
+
     // Create green mask in HSV to detect highlight/dots (like the green dot)
     val hsv = Mat()
     Imgproc.cvtColor(boardBgr, hsv, Imgproc.COLOR_BGR2HSV)
-    val lowerGreen = Scalar(30.0, 80.0, 40.0)   // H around 30-90 works; tuned for highlight green
+    // Tuned HSV range for typical green highlight; may tweak if UI color different
+    val lowerGreen = Scalar(35.0, 60.0, 40.0)
     val upperGreen = Scalar(95.0, 255.0, 255.0)
-    val greenMask = Mat()
-    Core.inRange(hsv, lowerGreen, upperGreen, greenMask)
+    val greenMaskFull = Mat()
+    Core.inRange(hsv, lowerGreen, upperGreen, greenMaskFull)
 
     val whiteNorm = normalizeSensitivity(WHITE_DETECTION_SENSITIVITY)
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
@@ -138,7 +152,7 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
     val POS_BRIGHT_DIFF = max(5.0, 20.0 - (whiteNorm * 0.15))
     val MIN_WHITE_STD = max(8.0, 25.0 - (whiteNorm * 0.2))
     val WHITE_EDGE_BOOST = whiteNorm * 0.2
-    val WHITE_BRIGHTNESS_THRESH = max(120.0, 180.0 - (whiteNorm * 0.4))
+    val WHITE_BRIGHTNESS_THRESH = max(110.0, 180.0 - (whiteNorm * 0.4))
 
     val NEG_BRIGHT_DIFF = min(-5.0, -15.0 - (blackNorm * 0.1))
     val BLACK_STD_THRESH = max(3.0, 8.0 + (blackNorm * 0.08))
@@ -150,7 +164,7 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
     val EMPTY_EDGE_THRESH = max(5.0, 25.0 - (emptyNorm * 0.2))
 
     // New: Calculate overall board brightness for adaptive thresholds
-    val boardMean = Core.mean(grayBoard).`val`[0]
+    val boardMean = Core.mean(grayNorm).`val`[0]
     val brightnessFactor = boardMean / 128.0 // Normalize around middle gray
 
     for (r in 0 until 8) {
@@ -161,41 +175,78 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
             val y2 = y1 + cellSize
 
             // Safety bounds
-            if (x2 > grayBoard.cols() || y2 > grayBoard.rows()) continue
+            if (x2 > grayNorm.cols() || y2 > grayNorm.rows()) continue
 
-            val square = grayBoard.submat(y1, y2, x1, x2)
+            val square = grayNorm.submat(y1, y2, x1, x2)
             if (square.rows() == 0 || square.cols() == 0) {
                 square.release()
                 continue
             }
 
-            // Check green overlay presence (from greenMask)
-            val greenPatch = greenMask.submat(y1, y2, x1, x2)
+            // Check green overlay presence (from greenMaskFull)
+            val greenPatch = greenMaskFull.submat(y1, y2, x1, x2)
             val greenPixels = Core.countNonZero(greenPatch)
             val totalPixels = greenPatch.total()
             val greenRatio = if (totalPixels > 0) greenPixels.toDouble() / totalPixels else 0.0
-            greenPatch.release()
 
-            // If there's a visible green overlay (e.g., highlight/dot), skip detection for this square
-            val GREEN_SKIP_THRESHOLD = 0.015 // ~1.5% pixels; tweakable
-            if (greenRatio > GREEN_SKIP_THRESHOLD) {
+            // Heuristics:
+            // - If green covers large area (e.g., entire square) we skip detection.
+            // - If green is small (dot/marker), we mask out green pixels and compute stats from remaining pixels.
+            val GREEN_SKIP_FULL_THRESHOLD = 0.30 // if >30% green, skip (likely overlay)
+            val label = "${files[c]}${ranks[r]}"
+
+            if (greenRatio > GREEN_SKIP_FULL_THRESHOLD) {
+                // Too much green, skip this square
+                greenPatch.release()
                 square.release()
                 continue
             }
 
+            // create mask for non-green pixels (white = keep, 0 = ignore)
+            val nonGreenMask = Mat()
+            Core.bitwise_not(greenPatch, nonGreenMask) // now nonGreenMask: 255 where not green, 0 where green
+
+            // inner margin to avoid borders
             val m = max(1, (cellSize * 0.25).toInt())
             val inner = square.submat(m, cellSize - m, m, cellSize - m)
             if (inner.empty()) {
                 inner.release()
+                nonGreenMask.release()
+                greenPatch.release()
                 square.release()
                 continue
             }
 
-            val innerMean = Core.mean(inner).`val`[0]
+            // Prepare inner mask corresponding to inner region
+            val innerMask = Mat()
+            try {
+                innerMask.create(inner.rows(), inner.cols(), CvType.CV_8UC1)
+                // extract corresponding region from nonGreenMask
+                val tmp = nonGreenMask.submat(m, cellSize - m, m, cellSize - m)
+                tmp.copyTo(innerMask)
+                tmp.release()
+            } catch (e: Exception) {
+                // fallback: if mask extraction fails, treat entire inner as non-masked
+                innerMask.setTo(Scalar(255.0))
+            }
+
+            // Compute mean and std dev ignoring green pixels by passing mask
             val meanMat = MatOfDouble()
             val stdMat = MatOfDouble()
-            Core.meanStdDev(inner, meanMat, stdMat)
+            Core.meanStdDev(inner, meanMat, stdMat, innerMask)
             val innerStd = stdMat.toArray()[0]
+            val innerMean = Core.mean(inner, innerMask).`val`[0]
+
+            // fallback if mask removed too many pixels (avoid empty stats)
+            if (innerMask.total() == Core.countNonZero(innerMask).toDouble() && innerMask.total() == 0.0) {
+                // mask empty, fallback to unmasked
+                Core.meanStdDev(inner, meanMat, stdMat)
+                val fallbackStd = stdMat.toArray()[0]
+                val fallbackMean = Core.mean(inner).`val`[0]
+                // assign
+                meanMat.put(0, 0, fallbackMean)
+                stdMat.put(0, 0, fallbackStd)
+            }
 
             val p = max(2, (cellSize * 0.15).toInt())
             val patchesCoords = listOf(
@@ -212,34 +263,55 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
                 try {
                     val patch = square.submat(rect)
                     if (!patch.empty()) {
-                        patchMeans.add(Core.mean(patch).`val`[0])
-                        val pMean = MatOfDouble()
-                        val pStd = MatOfDouble()
-                        Core.meanStdDev(patch, pMean, pStd)
-                        patchStds.add(pStd.toArray()[0])
-                        pMean.release()
-                        pStd.release()
+                        // compute patch mean/std ignoring green using appropriate region of mask
+                        val maskPatch = greenPatch.submat(rect)
+                        val nonG = Mat()
+                        Core.bitwise_not(maskPatch, nonG)
+                        val pMean = Core.mean(patch, nonG).`val`[0]
+                        val pStdMat = MatOfDouble()
+                        Core.meanStdDev(patch, MatOfDouble(), pStdMat, nonG)
+                        val pStd = pStdMat.toArray()[0]
+                        patchMeans.add(pMean)
+                        patchStds.add(pStd)
+                        pStdMat.release()
+                        nonG.release()
+                        maskPatch.release()
+                        patch.release()
+                    } else {
+                        patch.release()
                     }
-                    patch.release()
                 } catch (e: Exception) {
-                    // Continue if patch extraction fails
+                    // ignore
                 }
             }
 
             val localBg = if (patchMeans.isNotEmpty()) patchMeans.sorted()[patchMeans.size / 2] else innerMean
             val localBgStd = if (patchStds.isNotEmpty()) patchStds.sorted()[patchStds.size / 2] else innerStd
 
+            // For edge detection, neutralize green pixels by setting them to localBg so they don't produce edges
             val innerBlur = Mat()
             Imgproc.GaussianBlur(inner, innerBlur, Size(3.0, 3.0), 0.0)
+
+            // convert innerBlur to 8U if needed (should be CV_8U already)
+            val innerForEdges = innerBlur.clone()
+            try {
+                // set green pixels (where innerMask==0) to localBg so edges ignore them
+                val maskNot = Mat()
+                Core.bitwise_not(innerMask, maskNot) // maskNot=255 where green pixels
+                innerForEdges.setTo(Scalar(localBg), maskNot)
+                maskNot.release()
+            } catch (e: Exception) {
+                // ignore if something fails; proceed with unmodified innerBlur
+            }
+
             val edges = Mat()
-            Imgproc.Canny(innerBlur, edges, 50.0, 150.0)
+            Imgproc.Canny(innerForEdges, edges, 40.0, 120.0)
             val edgeCount = Core.countNonZero(edges)
 
             val absBrightness = innerMean
             val isVeryBright = absBrightness > WHITE_BRIGHTNESS_THRESH * brightnessFactor
 
             val diff = innerMean - localBg
-            val label = "${files[c]}${ranks[r]}"
             var pieceDetected = false
             var colorIsWhite = false
 
@@ -262,30 +334,23 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
                 EDGE_COUNT_THRESH + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
             }
 
-            // NEW: More sophisticated white piece detection
+            // More tolerant conditions to avoid missing white pieces
             val isLikelyWhitePiece = when {
-                // Case 1: Very bright with good contrast
+                // Very bright with texture
                 isVeryBright && innerStd > MIN_WHITE_STD -> true
-                // Case 2: Positive contrast with sufficient brightness and texture
-                diff >= adaptivePosThresh && innerStd > MIN_WHITE_STD && absBrightness > 100 -> true
-                // Case 3: High edge count with positive brightness characteristics
-                edgeCount >= adaptiveEdgeThresh && diff > 0 && innerStd > 8 -> true
+                // Positive contrast relative to local background
+                diff >= adaptivePosThresh && innerStd > max(6.0, MIN_WHITE_STD * 0.8) && absBrightness > 95 -> true
+                // Edge evidence + mild positive brightness
+                edgeCount >= adaptiveEdgeThresh && diff > -2 && innerStd > 6 -> true
                 else -> false
             }
 
-            // NEW: More conservative black piece detection
             val isLikelyBlackPiece = when {
-                // Case 1: Strong negative contrast with texture
-                diff <= adaptiveNegThresh && innerStd >= BLACK_STD_THRESH -> {
-                    val darkDelta = localBg - innerMean
-                    darkDelta >= 15.0 && absBrightness < 150 // Ensure it's actually dark
-                }
-                // Case 2: High edge count with negative brightness
-                edgeCount >= adaptiveEdgeThresh && diff < -10 && innerStd > 5 -> true
+                diff <= adaptiveNegThresh && innerStd >= BLACK_STD_THRESH && (localBg - innerMean) >= 12.0 && absBrightness < 150 -> true
+                edgeCount >= adaptiveEdgeThresh && diff < -8 && innerStd > 5 -> true
                 else -> false
             }
 
-            // Decision logic with priority for white detection
             when {
                 isLikelyWhitePiece -> {
                     pieceDetected = true
@@ -295,66 +360,55 @@ fun detectPiecesOnBoard(boardBgr: Mat, files: String, ranks: String, cellSize: I
                     pieceDetected = true
                     colorIsWhite = false
                 }
-                // NEW: Additional check for ambiguous cases
                 edgeCount >= adaptiveEdgeThresh && !isLikelyWhitePiece && !isLikelyBlackPiece -> {
-                    // If we have edges but can't clearly classify, use brightness as tiebreaker
                     pieceDetected = true
-                    colorIsWhite = diff > 0 || absBrightness > 120
+                    colorIsWhite = diff > 0 || absBrightness > 115
                 }
             }
 
-            // NEW: Additional validation to prevent misclassification
+            // Additional validation
             if (pieceDetected) {
-                // White pieces should not be too dark
-                if (colorIsWhite && absBrightness < 80) {
+                if (colorIsWhite && absBrightness < 70) {
                     pieceDetected = false
-                }
-                // Black pieces should not be too bright
-                else if (!colorIsWhite && absBrightness > 180) {
+                } else if (!colorIsWhite && absBrightness > 200) {
                     pieceDetected = false
-                }
-                // Both should have reasonable texture
-                else if (innerStd < 5 && edgeCount < 15) {
+                } else if (innerStd < 4 && edgeCount < 12) {
                     pieceDetected = false
                 }
             }
 
-            // Filter out small bright spots (noise)
+            // Filter out tiny bright noise
             val brightMask = Mat()
             Core.compare(inner, Scalar(200.0), brightMask, Core.CMP_GT)
             val brightPixels = Core.countNonZero(brightMask)
             brightMask.release()
-
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
-            val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 &&
-                    innerStd < 25 && absBrightness > 180)
-
-            if (isSmallBrightSpot) {
-                pieceDetected = false
-            }
+            val isSmallBrightSpot = (brightRatio < 0.04 && edgeCount < 15 && innerStd < 22 && absBrightness > 185)
+            if (isSmallBrightSpot) pieceDetected = false
 
             if (pieceDetected) {
-                if (colorIsWhite) {
-                    whiteSquares.add(label)
-                } else {
-                    blackSquares.add(label)
-                }
+                if (colorIsWhite) whiteSquares.add(label) else blackSquares.add(label)
             }
 
-            // release mats
+            // release mats for this iteration
             innerBlur.release()
+            innerForEdges.release()
             edges.release()
             meanMat.release()
             stdMat.release()
+            innerMask.release()
             inner.release()
+            nonGreenMask.release()
+            greenPatch.release()
             square.release()
         }
     }
 
     // cleanup
     grayBoard.release()
+    grayNorm.release()
     hsv.release()
-    greenMask.release()
+    greenMaskFull.release()
 
     return Pair(whiteSquares, blackSquares)
 }
@@ -377,6 +431,8 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val (detectedImg, innerPts) = detectLargestSquareLike(resized)
 
     if (innerPts == null) {
+        resized.release()
+        img.release()
         return null
     }
 
@@ -436,6 +492,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     M.release()
     detectedImg.release()
     innerPts.release()
+    boardWarped.release()
 
     return BoardState(whiteSquares.toSet(), blackSquares.toSet())
 }
@@ -471,7 +528,7 @@ fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
         moves.add("White captured $whiteSource$blackCaptured")
     }
 
-    if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty()) {
+        if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty()) {
         val blackSource = blackMoved.first()
         val whiteCaptured = whiteMoved.first()
         moves.add("Black captured $blackSource$whiteCaptured")
