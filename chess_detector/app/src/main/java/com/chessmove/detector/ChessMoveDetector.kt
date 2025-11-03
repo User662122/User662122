@@ -132,9 +132,10 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val MAX_EMPTY_STD = max(15.0, 25.0 + (emptyNorm * 0.2))
     val EMPTY_EDGE_THRESH = max(5.0, 25.0 - (emptyNorm * 0.2))
 
-    // New: Calculate overall board brightness for adaptive thresholds
-    val boardMean = Core.mean(grayBoard).`val`[0]
-    val brightnessFactor = boardMean / 128.0 // Normalize around middle gray
+    // NEW: Get the color board for green detection
+    val colorBoard = getColorBoard() // You'll need to make this available
+    val hsvBoard = Mat()
+    Imgproc.cvtColor(colorBoard, hsvBoard, Imgproc.COLOR_BGR2HSV)
 
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -153,6 +154,18 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             if (inner.empty()) {
                 continue
             }
+
+            // NEW: Check for green color in this square
+            val hsvSquare = hsvBoard.submat(y1 + m, y2 - m, x1 + m, x2 - m)
+            val greenMask = Mat()
+            val lowerGreen = Scalar(35.0, 50.0, 50.0)   // HSV range for green
+            val upperGreen = Scalar(85.0, 255.0, 255.0)
+            Core.inRange(hsvSquare, lowerGreen, upperGreen, greenMask)
+            val greenPixelCount = Core.countNonZero(greenMask)
+            val isGreenObject = greenPixelCount > inner.total() * 0.3 // If more than 30% is green
+            
+            hsvSquare.release()
+            greenMask.release()
 
             val innerMean = Core.mean(inner).`val`[0]
             val meanMat = MatOfDouble()
@@ -196,14 +209,13 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val edgeCount = Core.countNonZero(edges)
 
             val absBrightness = innerMean
-            val isVeryBright = absBrightness > WHITE_BRIGHTNESS_THRESH * brightnessFactor
+            val isVeryBright = absBrightness > WHITE_BRIGHTNESS_THRESH
 
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             var pieceDetected = false
             var colorIsWhite = false
 
-            // Adaptive thresholds based on overall board brightness
             val adaptivePosThresh = if (localBgStd > STD_BG_THRESH) {
                 POS_BRIGHT_DIFF + 5
             } else {
@@ -275,6 +287,10 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                 }
                 // Both should have reasonable texture
                 else if (innerStd < 5 && edgeCount < 15) {
+                    pieceDetected = false
+                }
+                // NEW: Exclude green objects (like the green dot)
+                else if (isGreenObject) {
                     pieceDetected = false
                 }
             }
@@ -370,9 +386,26 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
 
     val grayBoard = Mat()
     Imgproc.cvtColor(boardWarped, grayBoard, Imgproc.COLOR_BGR2GRAY)
+    
+    // NEW: Make color board available for green detection
+    // You'll need to create a way to access the color board in detectPiecesOnBoard
+    // This could be through a global variable or by modifying the function signature
+    setColorBoard(boardWarped) // You'll need to implement this
+    
     val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
 
     return BoardState(whiteSquares.toSet(), blackSquares.toSet())
+}
+
+// NEW: Simple way to make color board available
+private var currentColorBoard: Mat? = null
+
+private fun setColorBoard(board: Mat) {
+    currentColorBoard = board
+}
+
+private fun getColorBoard(): Mat {
+    return currentColorBoard ?: throw IllegalStateException("Color board not set")
 }
 
 fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
