@@ -117,20 +117,23 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-    // Adjust thresholds based on board orientation
-    val brightnessAdjustment = if (whiteOnBottom) 1.0 else 0.8
-    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.2)) * brightnessAdjustment
+    // FIXED: More conservative thresholds for black-at-bottom
+    val POS_BRIGHT_DIFF = if (whiteOnBottom) 
+        max(1.0, 25.0 - (whiteNorm * 0.2)) 
+    else 
+        max(1.0, 35.0 - (whiteNorm * 0.2))  // Higher threshold when black at bottom
+    
     val MIN_WHITE_STD = max(1.0, 30.0 - (whiteNorm * 0.25))
     val WHITE_EDGE_BOOST = whiteNorm * 0.3
     val WHITE_BRIGHTNESS_THRESH = if (whiteOnBottom) 
         max(100.0, 200.0 - (whiteNorm * 0.5)) 
     else 
-        max(120.0, 220.0 - (whiteNorm * 0.5))
+        max(130.0, 230.0 - (whiteNorm * 0.5))  // Higher threshold when black at bottom
     
     val NEG_BRIGHT_DIFF = if (whiteOnBottom)
         min(-1.0, -10.0 - (blackNorm * 0.2))
     else
-        min(-1.0, -15.0 - (blackNorm * 0.2))
+        min(-1.0, -8.0 - (blackNorm * 0.2))  // Less negative when black at bottom
     
     val BLACK_STD_THRESH = max(1.0, 5.0 + (blackNorm * 0.1))
     val BLACK_EDGE_BOOST = blackNorm * 0.3
@@ -220,16 +223,15 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
-            // Improved color detection logic
+            // FIXED: More conservative detection for black-at-bottom
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
-                // When black is at bottom, white pieces appear darker relative to background
+                // When black is at bottom, require stronger evidence for white pieces
                 colorIsWhite = if (whiteOnBottom) {
                     diff > 0 || isVeryBright
                 } else {
-                    // For black-at-bottom orientation, white pieces might have smaller positive diff
-                    // but higher absolute brightness and good edge detection
-                    (diff > curPosThresh * 0.7) || (isVeryBright && innerStd > MIN_WHITE_STD * 0.8)
+                    // More conservative: require both brightness AND positive difference
+                    (diff > curPosThresh * 0.8) && (isVeryBright || absBrightness > 150)
                 }
             } else {
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
@@ -245,21 +247,40 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                 }
             }
 
-            // Additional check for black-at-bottom orientation
-            if (!whiteOnBottom && pieceDetected && colorIsWhite) {
-                // White pieces on dark squares when black is at bottom
-                // They should have reasonable brightness and texture
-                if (absBrightness < 100 && innerStd < 20) {
-                    pieceDetected = false
+            // FIXED: More stringent checks for black-at-bottom
+            if (!whiteOnBottom) {
+                // Additional validation for black-at-bottom orientation
+                if (pieceDetected && colorIsWhite) {
+                    // White pieces should have good brightness and texture
+                    if (absBrightness < 120 || innerStd < 25) {
+                        pieceDetected = false
+                    }
+                } else if (pieceDetected && !colorIsWhite) {
+                    // Black pieces should be significantly darker than background
+                    if (diff > -5 || absBrightness > 100) {
+                        pieceDetected = false
+                    }
                 }
             }
 
+            // General validation that applies to both orientations
             if (pieceDetected && innerStd < 10 && edgeCount < EMPTY_EDGE_THRESH) {
                 pieceDetected = false
             }
 
             if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
                 pieceDetected = false
+            }
+
+            // FIXED: Additional check specifically for black pieces being misclassified
+            if (pieceDetected && colorIsWhite && !whiteOnBottom) {
+                // When black is at bottom, be extra careful about white classification
+                if (absBrightness < 140 && edgeCount < curEdgeThresh * 1.2) {
+                    // This might actually be a black piece, re-evaluate
+                    if (diff < curPosThresh * 0.5 && innerStd > BLACK_STD_THRESH) {
+                        colorIsWhite = false
+                    }
+                }
             }
 
             if (pieceDetected) {
@@ -327,7 +348,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"  
     val ranks = if (whiteOnBottom) "87654321" else "12345678"  
 
-    // ✅ FIX: Neutralize green dots (no fake black regions)  
+    // Neutralize green dots (no fake black regions)  
     val hsv = Mat()  
     Imgproc.cvtColor(boardWarped, hsv, Imgproc.COLOR_BGR2HSV)  
 
@@ -345,7 +366,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val grayBoard = Mat()  
     Imgproc.cvtColor(filteredBoard, grayBoard, Imgproc.COLOR_BGR2GRAY)  
     
-    // ✅ FIXED: Pass whiteOnBottom parameter
     val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize, whiteOnBottom)
 
     return BoardState(whiteSquares.toSet(), blackSquares.toSet())
@@ -365,19 +385,19 @@ fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
     val moves = mutableListOf<String>()  
 
     if (whiteMoved.size == 1 && whiteAppeared.size == 1) {  
-        moves.add("White moved ${whiteMoved.first()}${whiteAppeared.first()}")  
+        moves.add("${whiteMoved.first()}${whiteAppeared.first()}")  
     }  
 
     if (blackMoved.size == 1 && blackAppeared.size == 1) {  
-        moves.add("Black moved ${blackMoved.first()}${blackAppeared.first()}")  
+        moves.add("${blackMoved.first()}${blackAppeared.first()}")  
     }  
 
     if (whiteMoved.size == 1 && blackMoved.size == 1 && whiteAppeared.isEmpty()) {  
-        moves.add("White captured ${whiteMoved.first()}${blackMoved.first()}")  
+        moves.add("${whiteMoved.first()}${blackMoved.first()}")  
     }  
 
     if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty()) {  
-        moves.add("Black captured ${blackMoved.first()}${whiteMoved.first()}")  
+        moves.add("${blackMoved.first()}${whiteMoved.first()}")  
     }  
 
     return moves
