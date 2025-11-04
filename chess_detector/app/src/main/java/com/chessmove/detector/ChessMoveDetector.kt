@@ -1,4 +1,5 @@
 package com.chessmove.detector
+
 import android.graphics.Bitmap
 import org.opencv.android.Utils
 import org.opencv.core.*
@@ -136,15 +137,11 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val y2 = y1 + cellSize
 
             val square = grayBoard.submat(y1, y2, x1, x2)
-            if (square.rows() == 0 || square.cols() == 0) {
-                continue
-            }
+            if (square.rows() == 0 || square.cols() == 0) continue
 
             val m = max(1, (cellSize * 0.25).toInt())
             val inner = square.submat(m, cellSize - m, m, cellSize - m)
-            if (inner.empty()) {
-                continue
-            }
+            if (inner.empty()) continue
 
             val innerMean = Core.mean(inner).`val`[0]
             val meanMat = MatOfDouble()
@@ -173,8 +170,7 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                         Core.meanStdDev(patch, pMean, pStd)
                         patchStds.add(pStd.toArray()[0])
                     }
-                } catch (e: Exception) {
-                }
+                } catch (e: Exception) {}
             }
 
             val localBg = if (patchMeans.isNotEmpty()) patchMeans.sorted()[patchMeans.size / 2] else innerMean
@@ -212,8 +208,7 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                 Core.compare(this, Scalar(200.0), this, Core.CMP_GT)
             })
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
-            val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 &&
-                    innerStd < 25 && absBrightness > 180)
+            val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
@@ -241,11 +236,8 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             }
 
             if (pieceDetected) {
-                if (colorIsWhite) {
-                    whiteSquares.add(label)
-                } else {
-                    blackSquares.add(label)
-                }
+                if (colorIsWhite) whiteSquares.add(label)
+                else blackSquares.add(label)
             }
         }
     }
@@ -256,10 +248,7 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
-
-    if (img.empty()) {
-        return null
-    }
+    if (img.empty()) return null
 
     Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
 
@@ -268,10 +257,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Imgproc.resize(img, resized, Size(), scale, scale, Imgproc.INTER_AREA)
 
     val (detectedImg, innerPts) = detectLargestSquareLike(resized)
-
-    if (innerPts == null) {
-        return null
-    }
+    if (innerPts == null) return null
 
     val pts = innerPts.toArray()
     val sums = pts.map { it.x + it.y }
@@ -314,19 +300,20 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
 
-    // ✅ FIX START: Remove green dots before grayscale conversion
-    val filteredBoard = Mat()
+    // ✅ FIX START: Neutralize green dots (no fake black regions)
     val hsv = Mat()
     Imgproc.cvtColor(boardWarped, hsv, Imgproc.COLOR_BGR2HSV)
 
-    val lowerGreen = Scalar(35.0, 60.0, 60.0)
+    val lowerGreen = Scalar(35.0, 40.0, 40.0)
     val upperGreen = Scalar(85.0, 255.0, 255.0)
     val greenMask = Mat()
     Core.inRange(hsv, lowerGreen, upperGreen, greenMask)
 
-    val invMask = Mat()
-    Core.bitwise_not(greenMask, invMask)
-    boardWarped.copyTo(filteredBoard, invMask)
+    val blurred = Mat()
+    Imgproc.medianBlur(boardWarped, blurred, 21)
+
+    val filteredBoard = boardWarped.clone()
+    blurred.copyTo(filteredBoard, greenMask)
     // ✅ FIX END
 
     val grayBoard = Mat()
@@ -350,27 +337,19 @@ fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
     val moves = mutableListOf<String>()
 
     if (whiteMoved.size == 1 && whiteAppeared.size == 1) {
-        val source = whiteMoved.first()
-        val destination = whiteAppeared.first()
-        moves.add("White moved $source$destination")
+        moves.add("White moved ${whiteMoved.first()}${whiteAppeared.first()}")
     }
 
     if (blackMoved.size == 1 && blackAppeared.size == 1) {
-        val source = blackMoved.first()
-        val destination = blackAppeared.first()
-        moves.add("Black moved $source$destination")
+        moves.add("Black moved ${blackMoved.first()}${blackAppeared.first()}")
     }
 
     if (whiteMoved.size == 1 && blackMoved.size == 1 && whiteAppeared.isEmpty()) {
-        val whiteSource = whiteMoved.first()
-        val blackCaptured = blackMoved.first()
-        moves.add("White captured $whiteSource$blackCaptured")
+        moves.add("White captured ${whiteMoved.first()}${blackMoved.first()}")
     }
 
     if (blackMoved.size == 1 && whiteMoved.size == 1 && blackAppeared.isEmpty()) {
-        val blackSource = blackMoved.first()
-        val whiteCaptured = whiteMoved.first()
-        moves.add("Black captured $blackSource$whiteCaptured")
+        moves.add("Black captured ${blackMoved.first()}${whiteMoved.first()}")
     }
 
     return moves
