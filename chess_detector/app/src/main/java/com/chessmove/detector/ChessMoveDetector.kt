@@ -14,7 +14,8 @@ var EMPTY_DETECTION_SENSITIVITY = 50
 
 data class BoardState(
     val white: Set<String>,
-    val black: Set<String>
+    val black: Set<String>,
+    val annotatedBoard: Bitmap? = null  // New field for board with bounding boxes
 )
 
 fun shrinkPolygon(pts: MatOfPoint, shrinkFactor: Double = 0.95): MatOfPoint {
@@ -107,6 +108,78 @@ fun normalizeSensitivity(sensitivity: Int): Double {
     } else {
         100.0 + (sensitivity - 100) * 0.5
     }
+}
+
+fun drawPieceBoxes(boardWarped: Mat, whiteSquares: List<String>, blackSquares: List<String>, files: String, ranks: String, cellSize: Int): Mat {
+    val annotatedBoard = boardWarped.clone()
+    
+    // Draw white piece boxes (white rectangles)
+    for (square in whiteSquares) {
+        val fileChar = square[0]
+        val rankChar = square[1]
+        val fileIndex = files.indexOf(fileChar)
+        val rankIndex = ranks.indexOf(rankChar)
+        
+        if (fileIndex != -1 && rankIndex != -1) {
+            val x1 = fileIndex * cellSize
+            val y1 = rankIndex * cellSize
+            val x2 = x1 + cellSize
+            val y2 = y1 + cellSize
+            
+            // Draw white rectangle with thicker border
+            Imgproc.rectangle(
+                annotatedBoard, 
+                Point(x1.toDouble(), y1.toDouble()), 
+                Point(x2.toDouble(), y2.toDouble()), 
+                Scalar(255.0, 255.0, 255.0),  // White color
+                4  // Thickness
+            )
+            
+            // Add inner black border for better visibility
+            Imgproc.rectangle(
+                annotatedBoard, 
+                Point((x1 + 2).toDouble(), (y1 + 2).toDouble()), 
+                Point((x2 - 2).toDouble(), (y2 - 2).toDouble()), 
+                Scalar(0.0, 0.0, 0.0),  // Black color
+                2  // Thickness
+            )
+        }
+    }
+    
+    // Draw black piece boxes (black rectangles)
+    for (square in blackSquares) {
+        val fileChar = square[0]
+        val rankChar = square[1]
+        val fileIndex = files.indexOf(fileChar)
+        val rankIndex = ranks.indexOf(rankChar)
+        
+        if (fileIndex != -1 && rankIndex != -1) {
+            val x1 = fileIndex * cellSize
+            val y1 = rankIndex * cellSize
+            val x2 = x1 + cellSize
+            val y2 = y1 + cellSize
+            
+            // Draw black rectangle with thicker border
+            Imgproc.rectangle(
+                annotatedBoard, 
+                Point(x1.toDouble(), y1.toDouble()), 
+                Point(x2.toDouble(), y2.toDouble()), 
+                Scalar(0.0, 0.0, 0.0),  // Black color
+                4  // Thickness
+            )
+            
+            // Add inner white border for better visibility
+            Imgproc.rectangle(
+                annotatedBoard, 
+                Point((x1 + 2).toDouble(), (y1 + 2).toDouble()), 
+                Point((x2 - 2).toDouble(), (y2 - 2).toDouble()), 
+                Scalar(255.0, 255.0, 255.0),  // White color
+                2  // Thickness
+            )
+        }
+    }
+    
+    return annotatedBoard
 }
 
 fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: Int): Pair<List<String>, List<String>> {
@@ -327,7 +400,14 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
 
     val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
 
-    return BoardState(whiteSquares.toSet(), blackSquares.toSet())
+    // NEW: Create annotated board with bounding boxes
+    val annotatedBoard = drawPieceBoxes(boardWarped, whiteSquares, blackSquares, files, ranks, cellSize)
+    
+    // Convert annotated board to Bitmap
+    val annotatedBitmap = Bitmap.createBitmap(annotatedBoard.cols(), annotatedBoard.rows(), Bitmap.Config.ARGB_8888)
+    Utils.matToBitmap(annotatedBoard, annotatedBitmap)
+
+    return BoardState(whiteSquares.toSet(), blackSquares.toSet(), annotatedBitmap)
 }
 
 fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
