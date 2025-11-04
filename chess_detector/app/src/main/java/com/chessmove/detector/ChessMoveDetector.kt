@@ -8,8 +8,8 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 
-var WHITE_DETECTION_SENSITIVITY = 120
-var BLACK_DETECTION_SENSITIVITY = 5
+var WHITE_DETECTION_SENSITIVITY = 95
+var BLACK_DETECTION_SENSITIVITY = 50
 var EMPTY_DETECTION_SENSITIVITY = 50
 
 data class BoardState(
@@ -109,7 +109,7 @@ fun normalizeSensitivity(sensitivity: Int): Double {
     }
 }
 
-fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: Int, whiteOnBottom: Boolean): Pair<List<String>, List<String>> {
+fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: Int): Pair<List<String>, List<String>> {
     val whiteSquares = mutableListOf<String>()
     val blackSquares = mutableListOf<String>()
 
@@ -117,19 +117,18 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-    // ADJUSTED SETTINGS: Better balance between white and black detection
-    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.15))  // Reduced from 35
-    val MIN_WHITE_STD = max(1.0, 20.0 - (whiteNorm * 0.2))     // Reduced from 30
-    val WHITE_EDGE_BOOST = whiteNorm * 0.2                     // Reduced from 0.3
-    val WHITE_BRIGHTNESS_THRESH = max(120.0, 200.0 - (whiteNorm * 0.3))  // Reduced thresholds
-
-    val NEG_BRIGHT_DIFF = min(-1.0, -15.0 - (blackNorm * 0.3)) // More sensitive to dark areas
-    val BLACK_STD_THRESH = max(1.0, 8.0 + (blackNorm * 0.15))  // Increased from 5
-    val BLACK_EDGE_BOOST = blackNorm * 0.4                     // Increased from 0.3
-    val EDGE_COUNT_THRESH = max(5.0, 60.0 - (emptyNorm * 0.5)) // Reduced from 80
-    val STD_BG_THRESH = max(1.0, 8.0 + (emptyNorm * 0.1))      // Slightly increased
-    val MAX_EMPTY_STD = max(10.0, 20.0 + (emptyNorm * 0.2))    // Increased from 15
-    val EMPTY_EDGE_THRESH = max(1.0, 15.0 - (emptyNorm * 0.1)) // Reduced from 20
+    // Parameter calculations from Python code
+    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.2))
+    val MIN_WHITE_STD = max(1.0, 30.0 - (whiteNorm * 0.25))
+    val WHITE_EDGE_BOOST = whiteNorm * 0.3
+    val WHITE_BRIGHTNESS_THRESH = max(100.0, 200.0 - (whiteNorm * 0.5))
+    val NEG_BRIGHT_DIFF = min(-1.0, -10.0 - (blackNorm * 0.2))
+    val BLACK_STD_THRESH = max(1.0, 5.0 + (blackNorm * 0.1))
+    val BLACK_EDGE_BOOST = blackNorm * 0.3
+    val EDGE_COUNT_THRESH = max(5.0, 80.0 - (emptyNorm * 0.6))
+    val STD_BG_THRESH = max(1.0, 5.0 + (emptyNorm * 0.15))
+    val MAX_EMPTY_STD = max(10.0, 15.0 + (emptyNorm * 0.25))
+    val EMPTY_EDGE_THRESH = max(1.0, 20.0 - (emptyNorm * 0.15))
 
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -182,7 +181,7 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             Imgproc.GaussianBlur(inner, innerBlur, Size(3.0, 3.0), 0.0)
             val edges = Mat()
             Imgproc.Canny(innerBlur, edges, 50.0, 150.0)
-            val edgeCount = Core.countNonZero(edges)
+            val edgeCount = Core.countNonZero(edges).toDouble()
 
             val absBrightness = innerMean
             val isVeryBright = absBrightness > WHITE_BRIGHTNESS_THRESH
@@ -197,97 +196,62 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val curEdgeThresh: Double
 
             if (localBgStd > STD_BG_THRESH) {
-                curPosThresh = POS_BRIGHT_DIFF + 5  // Reduced adjustment
-                curNegThresh = NEG_BRIGHT_DIFF - 5  // Reduced adjustment
-                curEdgeThresh = EDGE_COUNT_THRESH + 15 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST  // Reduced from 25
+                curPosThresh = POS_BRIGHT_DIFF + 8
+                curNegThresh = NEG_BRIGHT_DIFF - 8
+                curEdgeThresh = EDGE_COUNT_THRESH + 25 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
             } else {
                 curPosThresh = POS_BRIGHT_DIFF
                 curNegThresh = NEG_BRIGHT_DIFF
                 curEdgeThresh = EDGE_COUNT_THRESH + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
             }
 
-            val brightPixels = Core.countNonZero(inner.apply {
-                Core.compare(this, Scalar(200.0), this, Core.CMP_GT)
-            })
-            val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
+            // Bright pixels calculation
+            val brightMask = Mat()
+            Core.compare(inner, Scalar(200.0), brightMask, Core.CMP_GT)
+            val brightPixels = Core.countNonZero(brightMask).toDouble()
+            val brightRatio = if (inner.total() > 0) brightPixels / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
-            // IMPROVED DETECTION LOGIC: Better balance between white and black
+            // Detection logic from Python code
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
-                // More balanced color detection
-                colorIsWhite = (diff > curPosThresh * 0.5) && (isVeryBright || absBrightness > 130)
+                colorIsWhite = diff > 0 || isVeryBright
             } else {
-                // WHITE PIECE DETECTION (relaxed)
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd >= MIN_WHITE_STD && innerStd <= MAX_EMPTY_STD * 1.5) {  // Relaxed upper bound
+                    if (innerStd >= MIN_WHITE_STD && innerStd <= MAX_EMPTY_STD) {
                         pieceDetected = true
                         colorIsWhite = true
                     }
-                } 
-                // BLACK PIECE DETECTION (improved)
-                else if (diff <= curNegThresh) {
-                    // More permissive black piece detection
-                    if (innerStd >= BLACK_STD_THRESH * 0.7 || edgeCount >= curEdgeThresh * 0.6) {  // Added edge count consideration
+                } else if (diff <= curNegThresh) {
+                    if (innerStd >= BLACK_STD_THRESH) {
                         pieceDetected = true
                         colorIsWhite = false
                     }
                 }
             }
 
-            // IMPROVED VALIDATION: Less aggressive filtering for black pieces
-            if (pieceDetected && innerStd < 8 && edgeCount < EMPTY_EDGE_THRESH * 0.8) {  // Reduced thresholds
-                // Only filter out if it's clearly empty (very low values)
-                if (innerStd < 5 && edgeCount < 5 && absBrightness in 80.0..180.0) {
-                    pieceDetected = false
-                }
-            }
-
-            // Relax white piece validation
-            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 12) {  // Reduced from 15
+            // Validation checks
+            if (pieceDetected && innerStd < 10 && edgeCount < EMPTY_EDGE_THRESH) {
                 pieceDetected = false
             }
 
-            // IMPROVED COLOR VALIDATION
+            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
+                pieceDetected = false
+            }
+
             if (pieceDetected) {
                 if (colorIsWhite) {
-                    // White pieces should have reasonable brightness but not too strict
-                    if (absBrightness < 100) {  // Reduced from 120/140
-                        // Might be misclassified black piece, re-evaluate
-                        if (diff < curPosThresh * 0.3 && innerStd > BLACK_STD_THRESH) {
-                            colorIsWhite = false
-                        } else if (absBrightness < 80) {
-                            pieceDetected = false
-                        }
-                    }
+                    whiteSquares.add(label)
                 } else {
-                    // Black pieces should be darker than background but allow some flexibility
-                    if (diff > -3 && absBrightness > 120) {  // Relaxed thresholds
-                        // Might be empty or misclassified, re-evaluate
-                        if (edgeCount < curEdgeThresh * 0.4 && innerStd < 10) {
-                            pieceDetected = false
-                        }
-                    }
+                    blackSquares.add(label)
                 }
-            }
-
-            // FINAL CHECK: Ensure we're not detecting empty squares as pieces
-            if (pieceDetected) {
-                // Additional check for very uniform areas (likely empty)
-                if (innerStd < 5 && edgeCount < 8 && absBrightness in 100.0..160.0) {
-                    pieceDetected = false
-                }
-            }
-
-            if (pieceDetected) {
-                if (colorIsWhite) whiteSquares.add(label)
-                else blackSquares.add(label)
             }
         }
     }
 
     return Pair(whiteSquares, blackSquares)
 }
+
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
@@ -343,7 +307,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"  
     val ranks = if (whiteOnBottom) "87654321" else "12345678"  
 
-    // Neutralize green dots (no fake black regions)  
+    // Green dot neutralization
     val hsv = Mat()  
     Imgproc.cvtColor(boardWarped, hsv, Imgproc.COLOR_BGR2HSV)  
 
@@ -361,7 +325,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val grayBoard = Mat()  
     Imgproc.cvtColor(filteredBoard, grayBoard, Imgproc.COLOR_BGR2GRAY)  
 
-    val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize, whiteOnBottom)
+    val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
 
     return BoardState(whiteSquares.toSet(), blackSquares.toSet())
 }
