@@ -116,23 +116,17 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-    val POS_BRIGHT_DIFF = max(5.0, 20.0 - (whiteNorm * 0.15))
-    val MIN_WHITE_STD = max(8.0, 25.0 - (whiteNorm * 0.2))
-    val WHITE_EDGE_BOOST = whiteNorm * 0.2
-    val WHITE_BRIGHTNESS_THRESH = max(120.0, 180.0 - (whiteNorm * 0.4))
-    
-    val NEG_BRIGHT_DIFF = min(-5.0, -15.0 - (blackNorm * 0.1))
-    val BLACK_STD_THRESH = max(3.0, 8.0 + (blackNorm * 0.08))
-    val BLACK_EDGE_BOOST = blackNorm * 0.2
-    
-    val EDGE_COUNT_THRESH = max(10.0, 60.0 - (emptyNorm * 0.5))
-    val STD_BG_THRESH = max(2.0, 8.0 + (emptyNorm * 0.1))
-    val MAX_EMPTY_STD = max(15.0, 25.0 + (emptyNorm * 0.2))
-    val EMPTY_EDGE_THRESH = max(5.0, 25.0 - (emptyNorm * 0.2))
-
-    val colorBoard = getColorBoard()
-    val hsvBoard = Mat()
-    Imgproc.cvtColor(colorBoard, hsvBoard, Imgproc.COLOR_BGR2HSV)
+    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.2))
+    val MIN_WHITE_STD = max(1.0, 30.0 - (whiteNorm * 0.25))
+    val WHITE_EDGE_BOOST = whiteNorm * 0.3
+    val WHITE_BRIGHTNESS_THRESH = max(100.0, 200.0 - (whiteNorm * 0.5))
+    val NEG_BRIGHT_DIFF = min(-1.0, -10.0 - (blackNorm * 0.2))
+    val BLACK_STD_THRESH = max(1.0, 5.0 + (blackNorm * 0.1))
+    val BLACK_EDGE_BOOST = blackNorm * 0.3
+    val EDGE_COUNT_THRESH = max(5.0, 80.0 - (emptyNorm * 0.6))
+    val STD_BG_THRESH = max(1.0, 5.0 + (emptyNorm * 0.15))
+    val MAX_EMPTY_STD = max(10.0, 15.0 + (emptyNorm * 0.25))
+    val EMPTY_EDGE_THRESH = max(1.0, 20.0 - (emptyNorm * 0.15))
 
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -142,25 +136,15 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val y2 = y1 + cellSize
 
             val square = grayBoard.submat(y1, y2, x1, x2)
-            if (square.rows() == 0 || square.cols() == 0) continue
+            if (square.rows() == 0 || square.cols() == 0) {
+                continue
+            }
 
             val m = max(1, (cellSize * 0.25).toInt())
             val inner = square.submat(m, cellSize - m, m, cellSize - m)
-            if (inner.empty()) continue
-
-            // Green detection
-            val hsvSquare = hsvBoard.submat(y1 + m, y2 - m, x1 + m, x2 - m)
-            val greenMask = Mat()
-            val lowerGreen = Scalar(35.0, 50.0, 50.0)
-            val upperGreen = Scalar(85.0, 255.0, 255.0)
-            Core.inRange(hsvSquare, lowerGreen, upperGreen, greenMask)
-            val greenPixelCount = Core.countNonZero(greenMask)
-            val isGreenObject = greenPixelCount > inner.total() * 0.3
-
-            hsvSquare.release()
-            greenMask.release()
-
-            if (isGreenObject) continue // ✅ Skip green-highlighted cells
+            if (inner.empty()) {
+                continue
+            }
 
             val innerMean = Core.mean(inner).`val`[0]
             val meanMat = MatOfDouble()
@@ -189,7 +173,8 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                         Core.meanStdDev(patch, pMean, pStd)
                         patchStds.add(pStd.toArray()[0])
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                }
             }
 
             val localBg = if (patchMeans.isNotEmpty()) patchMeans.sorted()[patchMeans.size / 2] else innerMean
@@ -209,63 +194,58 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             var pieceDetected = false
             var colorIsWhite = false
 
-            val adaptivePosThresh = if (localBgStd > STD_BG_THRESH) POS_BRIGHT_DIFF + 5 else POS_BRIGHT_DIFF
-            val adaptiveNegThresh = if (localBgStd > STD_BG_THRESH) NEG_BRIGHT_DIFF - 5 else NEG_BRIGHT_DIFF
-            val adaptiveEdgeThresh =
-                if (localBgStd > STD_BG_THRESH) EDGE_COUNT_THRESH + 20 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
-                else EDGE_COUNT_THRESH + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
+            val curPosThresh: Double
+            val curNegThresh: Double
+            val curEdgeThresh: Double
 
-            val isLikelyWhitePiece = when {
-                isVeryBright && innerStd > MIN_WHITE_STD -> true
-                diff >= adaptivePosThresh && innerStd > MIN_WHITE_STD && absBrightness > 100 -> true
-                edgeCount >= adaptiveEdgeThresh && diff > 0 && innerStd > 8 -> true
-                else -> false
+            if (localBgStd > STD_BG_THRESH) {
+                curPosThresh = POS_BRIGHT_DIFF + 8
+                curNegThresh = NEG_BRIGHT_DIFF - 8
+                curEdgeThresh = EDGE_COUNT_THRESH + 25 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
+            } else {
+                curPosThresh = POS_BRIGHT_DIFF
+                curNegThresh = NEG_BRIGHT_DIFF
+                curEdgeThresh = EDGE_COUNT_THRESH + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
             }
 
-            val isLikelyBlackPiece = when {
-                diff <= adaptiveNegThresh && innerStd >= BLACK_STD_THRESH -> {
-                    val darkDelta = localBg - innerMean
-                    darkDelta >= 15.0 && absBrightness < 150
-                }
-                edgeCount >= adaptiveEdgeThresh && diff < -10 && innerStd > 5 -> true
-                else -> false
-            }
-
-            when {
-                isLikelyWhitePiece -> {
-                    pieceDetected = true
-                    colorIsWhite = true
-                }
-                isLikelyBlackPiece -> {
-                    pieceDetected = true
-                    colorIsWhite = false
-                }
-                edgeCount >= adaptiveEdgeThresh && !isLikelyWhitePiece && !isLikelyBlackPiece -> {
-                    pieceDetected = true
-                    colorIsWhite = diff > 0 || absBrightness > 120
-                }
-            }
-
-            if (pieceDetected) {
-                if (colorIsWhite && absBrightness < 80) pieceDetected = false
-                else if (!colorIsWhite && absBrightness > 180) pieceDetected = false
-                else if (innerStd < 5 && edgeCount < 15) pieceDetected = false
-            }
-
-            val brightMask = Mat()
-            Core.compare(inner, Scalar(200.0), brightMask, Core.CMP_GT)
-            val brightPixels = Core.countNonZero(brightMask)
-            brightMask.release()
-
+            val brightPixels = Core.countNonZero(inner.apply {
+                Core.compare(this, Scalar(200.0), this, Core.CMP_GT)
+            })
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 &&
                     innerStd < 25 && absBrightness > 180)
 
-            if (isSmallBrightSpot) pieceDetected = false
+            if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
+                pieceDetected = true
+                colorIsWhite = diff > 0 || isVeryBright
+            } else {
+                if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
+                    if (innerStd in MIN_WHITE_STD..MAX_EMPTY_STD) {
+                        pieceDetected = true
+                        colorIsWhite = true
+                    }
+                } else if (diff <= curNegThresh) {
+                    if (innerStd >= BLACK_STD_THRESH) {
+                        pieceDetected = true
+                        colorIsWhite = false
+                    }
+                }
+            }
+
+            if (pieceDetected && innerStd < 10 && edgeCount < EMPTY_EDGE_THRESH) {
+                pieceDetected = false
+            }
+
+            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
+                pieceDetected = false
+            }
 
             if (pieceDetected) {
-                if (colorIsWhite) whiteSquares.add(label)
-                else blackSquares.add(label)
+                if (colorIsWhite) {
+                    whiteSquares.add(label)
+                } else {
+                    blackSquares.add(label)
+                }
             }
         }
     }
@@ -276,15 +256,22 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
-    if (img.empty()) return null
+
+    if (img.empty()) {
+        return null
+    }
 
     Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
+
     val resized = Mat()
     val scale = 900.0 / img.cols()
     Imgproc.resize(img, resized, Size(), scale, scale, Imgproc.INTER_AREA)
 
     val (detectedImg, innerPts) = detectLargestSquareLike(resized)
-    if (innerPts == null) return null
+
+    if (innerPts == null) {
+        return null
+    }
 
     val pts = innerPts.toArray()
     val sums = pts.map { it.x + it.y }
@@ -327,18 +314,26 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
 
+    // ✅ FIX START: Remove green dots before grayscale conversion
+    val filteredBoard = Mat()
+    val hsv = Mat()
+    Imgproc.cvtColor(boardWarped, hsv, Imgproc.COLOR_BGR2HSV)
+
+    val lowerGreen = Scalar(35.0, 60.0, 60.0)
+    val upperGreen = Scalar(85.0, 255.0, 255.0)
+    val greenMask = Mat()
+    Core.inRange(hsv, lowerGreen, upperGreen, greenMask)
+
+    val invMask = Mat()
+    Core.bitwise_not(greenMask, invMask)
+    boardWarped.copyTo(filteredBoard, invMask)
+    // ✅ FIX END
+
     val grayBoard = Mat()
-    Imgproc.cvtColor(boardWarped, grayBoard, Imgproc.COLOR_BGR2GRAY)
-    setColorBoard(boardWarped)
-
+    Imgproc.cvtColor(filteredBoard, grayBoard, Imgproc.COLOR_BGR2GRAY)
     val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
-    return BoardState(whiteSquares.toSet(), blackSquares.toSet())
-}
 
-private var currentColorBoard: Mat? = null
-private fun setColorBoard(board: Mat) { currentColorBoard = board }
-private fun getColorBoard(): Mat {
-    return currentColorBoard ?: throw IllegalStateException("Color board not set")
+    return BoardState(whiteSquares.toSet(), blackSquares.toSet())
 }
 
 fun detectUciMoves(state1: BoardState, state2: BoardState): List<String> {
