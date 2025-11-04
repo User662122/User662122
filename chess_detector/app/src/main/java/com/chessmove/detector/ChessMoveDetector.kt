@@ -1,10 +1,14 @@
 package com.chessmove.detector
 
 import android.graphics.Bitmap
+import android.os.Environment
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
 import kotlin.math.max
 import kotlin.math.min
 
@@ -15,7 +19,7 @@ var EMPTY_DETECTION_SENSITIVITY = 50
 data class BoardState(
     val white: Set<String>,
     val black: Set<String>,
-    val annotatedBoard: Bitmap? = null  // New field for board with bounding boxes
+    val annotatedBoard: Bitmap? = null
 )
 
 fun shrinkPolygon(pts: MatOfPoint, shrinkFactor: Double = 0.95): MatOfPoint {
@@ -143,6 +147,17 @@ fun drawPieceBoxes(boardWarped: Mat, whiteSquares: List<String>, blackSquares: L
                 Scalar(0.0, 0.0, 0.0),  // Black color
                 2  // Thickness
             )
+            
+            // Add label for white piece
+            Imgproc.putText(
+                annotatedBoard,
+                "W",
+                Point((x1 + cellSize/2 - 5).toDouble(), (y1 + cellSize/2 + 5).toDouble()),
+                Imgproc.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                Scalar(0.0, 0.0, 0.0),
+                2
+            )
         }
     }
     
@@ -176,10 +191,54 @@ fun drawPieceBoxes(boardWarped: Mat, whiteSquares: List<String>, blackSquares: L
                 Scalar(255.0, 255.0, 255.0),  // White color
                 2  // Thickness
             )
+            
+            // Add label for black piece
+            Imgproc.putText(
+                annotatedBoard,
+                "B",
+                Point((x1 + cellSize/2 - 5).toDouble(), (y1 + cellSize/2 + 5).toDouble()),
+                Imgproc.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                Scalar(255.0, 255.0, 255.0),
+                2
+            )
         }
     }
     
     return annotatedBoard
+}
+
+// NEW FUNCTION: Save annotated image to file
+fun saveAnnotatedImage(bitmap: Bitmap, filename: String): String? {
+    return try {
+        val storageDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        val chessDir = File(storageDir, "ChessDetector")
+        if (!chessDir.exists()) {
+            chessDir.mkdirs()
+        }
+        
+        val imageFile = File(chessDir, "$filename.jpg")
+        val outputStream = FileOutputStream(imageFile)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+        outputStream.flush()
+        outputStream.close()
+        
+        imageFile.absolutePath
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+// NEW FUNCTION: Create annotated image from board state
+fun createAnnotatedBoardImage(boardState: BoardState): Bitmap? {
+    return boardState.annotatedBoard
+}
+
+// NEW FUNCTION: Get annotated image as Bitmap (main function to call)
+fun getAnnotatedImageWithBoxes(bitmap: Bitmap): Bitmap? {
+    val boardState = getBoardStateFromBitmap(bitmap, "Annotated Board")
+    return boardState?.annotatedBoard
 }
 
 fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: Int): Pair<List<String>, List<String>> {
@@ -400,7 +459,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
 
     val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
 
-    // NEW: Create annotated board with bounding boxes
+    // Create annotated board with bounding boxes
     val annotatedBoard = drawPieceBoxes(boardWarped, whiteSquares, blackSquares, files, ranks, cellSize)
     
     // Convert annotated board to Bitmap
