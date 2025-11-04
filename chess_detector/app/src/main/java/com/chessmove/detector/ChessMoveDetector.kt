@@ -109,7 +109,13 @@ fun normalizeSensitivity(sensitivity: Int): Double {
     }
 }
 
-fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: Int): Pair<List<String>, List<String>> {
+fun detectPiecesOnBoard(
+    grayBoard: Mat,
+    files: String,
+    ranks: String,
+    cellSize: Int,
+    whiteOnBottom: Boolean
+): Pair<List<String>, List<String>> {
     val whiteSquares = mutableListOf<String>()
     val blackSquares = mutableListOf<String>()
 
@@ -210,19 +216,20 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
+            // === Orientation-aware piece color detection ===
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
-                colorIsWhite = diff > 0 || isVeryBright
+                colorIsWhite = if (whiteOnBottom) (diff > 0 || isVeryBright) else (diff < 0 && !isVeryBright)
             } else {
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
                     if (innerStd in MIN_WHITE_STD..MAX_EMPTY_STD) {
                         pieceDetected = true
-                        colorIsWhite = true
+                        colorIsWhite = whiteOnBottom
                     }
                 } else if (diff <= curNegThresh) {
                     if (innerStd >= BLACK_STD_THRESH) {
                         pieceDetected = true
-                        colorIsWhite = false
+                        colorIsWhite = !whiteOnBottom
                     }
                 }
             }
@@ -300,7 +307,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
 
-    // ✅ FIX START: Neutralize green dots (no fake black regions)
+    // ✅ FIX START: Neutralize green dots
     val hsv = Mat()
     Imgproc.cvtColor(boardWarped, hsv, Imgproc.COLOR_BGR2HSV)
 
@@ -318,7 +325,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
 
     val grayBoard = Mat()
     Imgproc.cvtColor(filteredBoard, grayBoard, Imgproc.COLOR_BGR2GRAY)
-    val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize)
+    val (whiteSquares, blackSquares) = detectPiecesOnBoard(grayBoard, files, ranks, cellSize, whiteOnBottom)
 
     return BoardState(whiteSquares.toSet(), blackSquares.toSet())
 }
