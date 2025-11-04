@@ -117,24 +117,19 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-    // UNIVERSAL SETTINGS: Keep white detection settings unchanged
-    val POS_BRIGHT_DIFF = max(1.0, 35.0 - (whiteNorm * 0.2))
-    val MIN_WHITE_STD = max(1.0, 30.0 - (whiteNorm * 0.25))
-    val WHITE_EDGE_BOOST = whiteNorm * 0.3
-    val WHITE_BRIGHTNESS_THRESH = max(130.0, 230.0 - (whiteNorm * 0.5))
+    // ADJUSTED SETTINGS: Better balance between white and black detection
+    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.15))  // Reduced from 35
+    val MIN_WHITE_STD = max(1.0, 20.0 - (whiteNorm * 0.2))     // Reduced from 30
+    val WHITE_EDGE_BOOST = whiteNorm * 0.2                     // Reduced from 0.3
+    val WHITE_BRIGHTNESS_THRESH = max(120.0, 200.0 - (whiteNorm * 0.3))  // Reduced thresholds
 
-    // IMPROVED BLACK DETECTION SETTINGS
-    val NEG_BRIGHT_DIFF = min(-1.0, -5.0 - (blackNorm * 0.15)) // Less strict negative threshold
-    val BLACK_STD_THRESH = max(1.0, 3.0 + (blackNorm * 0.08)) // Lower std threshold for black pieces
-    val BLACK_EDGE_BOOST = blackNorm * 0.3
-    val EDGE_COUNT_THRESH = max(5.0, 80.0 - (emptyNorm * 0.6))
-    val STD_BG_THRESH = max(1.0, 5.0 + (emptyNorm * 0.15))
-    val MAX_EMPTY_STD = max(10.0, 15.0 + (emptyNorm * 0.25))
-    val EMPTY_EDGE_THRESH = max(1.0, 20.0 - (emptyNorm * 0.15))
-
-    // NEW: Black piece specific thresholds
-    val BLACK_BRIGHTNESS_THRESH = 80.0 + (blackNorm * 0.5) // Higher brightness allowance for black pieces
-    val MIN_BLACK_EDGE_COUNT = max(2.0, 10.0 - (blackNorm * 0.15)) // Lower edge requirement for black
+    val NEG_BRIGHT_DIFF = min(-1.0, -15.0 - (blackNorm * 0.3)) // More sensitive to dark areas
+    val BLACK_STD_THRESH = max(1.0, 8.0 + (blackNorm * 0.15))  // Increased from 5
+    val BLACK_EDGE_BOOST = blackNorm * 0.4                     // Increased from 0.3
+    val EDGE_COUNT_THRESH = max(5.0, 60.0 - (emptyNorm * 0.5)) // Reduced from 80
+    val STD_BG_THRESH = max(1.0, 8.0 + (emptyNorm * 0.1))      // Slightly increased
+    val MAX_EMPTY_STD = max(10.0, 20.0 + (emptyNorm * 0.2))    // Increased from 15
+    val EMPTY_EDGE_THRESH = max(1.0, 15.0 - (emptyNorm * 0.1)) // Reduced from 20
 
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -202,9 +197,9 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val curEdgeThresh: Double
 
             if (localBgStd > STD_BG_THRESH) {
-                curPosThresh = POS_BRIGHT_DIFF + 8
-                curNegThresh = NEG_BRIGHT_DIFF - 3 // Less penalty for black in textured background
-                curEdgeThresh = EDGE_COUNT_THRESH + 25 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST
+                curPosThresh = POS_BRIGHT_DIFF + 5  // Reduced adjustment
+                curNegThresh = NEG_BRIGHT_DIFF - 5  // Reduced adjustment
+                curEdgeThresh = EDGE_COUNT_THRESH + 15 + WHITE_EDGE_BOOST + BLACK_EDGE_BOOST  // Reduced from 25
             } else {
                 curPosThresh = POS_BRIGHT_DIFF
                 curNegThresh = NEG_BRIGHT_DIFF
@@ -217,51 +212,72 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
-            // IMPROVED BLACK PIECE DETECTION LOGIC
-            val isPotentialBlackPiece = (diff <= curNegThresh && 
-                                       innerStd >= BLACK_STD_THRESH && 
-                                       absBrightness <= BLACK_BRIGHTNESS_THRESH &&
-                                       edgeCount >= MIN_BLACK_EDGE_COUNT)
-
-            // UNIVERSAL DETECTION LOGIC: Keep white detection exactly the same
+            // IMPROVED DETECTION LOGIC: Better balance between white and black
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
-                // Use white-at-top logic: require both brightness AND positive difference
-                colorIsWhite = (diff > curPosThresh * 0.8) && (isVeryBright || absBrightness > 150)
+                // More balanced color detection
+                colorIsWhite = (diff > curPosThresh * 0.5) && (isVeryBright || absBrightness > 130)
             } else {
+                // WHITE PIECE DETECTION (relaxed)
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd in MIN_WHITE_STD..MAX_EMPTY_STD) {
+                    if (innerStd >= MIN_WHITE_STD && innerStd <= MAX_EMPTY_STD * 1.5) {  // Relaxed upper bound
                         pieceDetected = true
                         colorIsWhite = true
                     }
-                } else if (isPotentialBlackPiece) {
-                    // NEW: More reliable black piece detection
-                    pieceDetected = true
-                    colorIsWhite = false
+                } 
+                // BLACK PIECE DETECTION (improved)
+                else if (diff <= curNegThresh) {
+                    // More permissive black piece detection
+                    if (innerStd >= BLACK_STD_THRESH * 0.7 || edgeCount >= curEdgeThresh * 0.6) {  // Added edge count consideration
+                        pieceDetected = true
+                        colorIsWhite = false
+                    }
                 }
             }
 
-            // UNIVERSAL VALIDATION: Apply white-at-top validation regardless of orientation
-            if (pieceDetected && innerStd < 10 && edgeCount < EMPTY_EDGE_THRESH) {
-                pieceDetected = false
-            }
-
-            // REMOVED: The overly strict black piece validation that was causing false negatives
-            // Only keep the check for white pieces with insufficient brightness
-            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
-                pieceDetected = false
-            }
-
-            // Additional white-at-top validation checks (unchanged)
-            if (pieceDetected && colorIsWhite) {
-                // White pieces should have good brightness and texture
-                if (absBrightness < 120 || innerStd < 25) {
+            // IMPROVED VALIDATION: Less aggressive filtering for black pieces
+            if (pieceDetected && innerStd < 8 && edgeCount < EMPTY_EDGE_THRESH * 0.8) {  // Reduced thresholds
+                // Only filter out if it's clearly empty (very low values)
+                if (innerStd < 5 && edgeCount < 5 && absBrightness in 80.0..180.0) {
                     pieceDetected = false
                 }
             }
 
-            // REMOVED: The problematic re-evaluation that was converting black pieces to white
-            // Black pieces are now properly detected in the main logic
+            // Relax white piece validation
+            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 12) {  // Reduced from 15
+                pieceDetected = false
+            }
+
+            // IMPROVED COLOR VALIDATION
+            if (pieceDetected) {
+                if (colorIsWhite) {
+                    // White pieces should have reasonable brightness but not too strict
+                    if (absBrightness < 100) {  // Reduced from 120/140
+                        // Might be misclassified black piece, re-evaluate
+                        if (diff < curPosThresh * 0.3 && innerStd > BLACK_STD_THRESH) {
+                            colorIsWhite = false
+                        } else if (absBrightness < 80) {
+                            pieceDetected = false
+                        }
+                    }
+                } else {
+                    // Black pieces should be darker than background but allow some flexibility
+                    if (diff > -3 && absBrightness > 120) {  // Relaxed thresholds
+                        // Might be empty or misclassified, re-evaluate
+                        if (edgeCount < curEdgeThresh * 0.4 && innerStd < 10) {
+                            pieceDetected = false
+                        }
+                    }
+                }
+            }
+
+            // FINAL CHECK: Ensure we're not detecting empty squares as pieces
+            if (pieceDetected) {
+                // Additional check for very uniform areas (likely empty)
+                if (innerStd < 5 && edgeCount < 8 && absBrightness in 100.0..160.0) {
+                    pieceDetected = false
+                }
+            }
 
             if (pieceDetected) {
                 if (colorIsWhite) whiteSquares.add(label)
