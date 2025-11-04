@@ -117,13 +117,13 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
 
-    // UNIVERSAL SETTINGS: Always use white-at-bottom settings regardless of orientation
-    val POS_BRIGHT_DIFF = max(1.0, 25.0 - (whiteNorm * 0.2))
+    // UNIVERSAL SETTINGS: Always use white-at-top (black-at-bottom) settings regardless of orientation
+    val POS_BRIGHT_DIFF = max(1.0, 35.0 - (whiteNorm * 0.2))
     val MIN_WHITE_STD = max(1.0, 30.0 - (whiteNorm * 0.25))
     val WHITE_EDGE_BOOST = whiteNorm * 0.3
-    val WHITE_BRIGHTNESS_THRESH = max(100.0, 200.0 - (whiteNorm * 0.5))
+    val WHITE_BRIGHTNESS_THRESH = max(130.0, 230.0 - (whiteNorm * 0.5))
 
-    val NEG_BRIGHT_DIFF = min(-1.0, -10.0 - (blackNorm * 0.2))
+    val NEG_BRIGHT_DIFF = min(-1.0, -8.0 - (blackNorm * 0.2))
     val BLACK_STD_THRESH = max(1.0, 5.0 + (blackNorm * 0.1))
     val BLACK_EDGE_BOOST = blackNorm * 0.3
     val EDGE_COUNT_THRESH = max(5.0, 80.0 - (emptyNorm * 0.6))
@@ -212,10 +212,11 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
             val brightRatio = if (inner.total() > 0) brightPixels.toDouble() / inner.total() else 0.0
             val isSmallBrightSpot = (brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180)
 
-            // UNIVERSAL DETECTION LOGIC: Always use the same detection logic
+            // UNIVERSAL DETECTION LOGIC: Always use white-at-top detection logic
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
-                colorIsWhite = diff > 0 || isVeryBright
+                // Use white-at-top logic: require both brightness AND positive difference
+                colorIsWhite = (diff > curPosThresh * 0.8) && (isVeryBright || absBrightness > 150)
             } else {
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
                     if (innerStd in MIN_WHITE_STD..MAX_EMPTY_STD) {
@@ -230,13 +231,37 @@ fun detectPiecesOnBoard(grayBoard: Mat, files: String, ranks: String, cellSize: 
                 }
             }
 
-            // UNIVERSAL VALIDATION: Apply same validation regardless of orientation
+            // UNIVERSAL VALIDATION: Apply white-at-top validation regardless of orientation
             if (pieceDetected && innerStd < 10 && edgeCount < EMPTY_EDGE_THRESH) {
                 pieceDetected = false
             }
 
             if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
                 pieceDetected = false
+            }
+
+            // Additional white-at-top validation checks
+            if (pieceDetected && colorIsWhite) {
+                // White pieces should have good brightness and texture
+                if (absBrightness < 120 || innerStd < 25) {
+                    pieceDetected = false
+                }
+            } else if (pieceDetected && !colorIsWhite) {
+                // Black pieces should be significantly darker than background
+                if (diff > -5 || absBrightness > 100) {
+                    pieceDetected = false
+                }
+            }
+
+            // Additional check specifically for black pieces being misclassified
+            if (pieceDetected && colorIsWhite) {
+                // Be extra careful about white classification
+                if (absBrightness < 140 && edgeCount < curEdgeThresh * 1.2) {
+                    // This might actually be a black piece, re-evaluate
+                    if (diff < curPosThresh * 0.5 && innerStd > BLACK_STD_THRESH) {
+                        colorIsWhite = false
+                    }
+                }
             }
 
             if (pieceDetected) {
