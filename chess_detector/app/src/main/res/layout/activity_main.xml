@@ -105,7 +105,7 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardResult"
             android:layout_width="match_parent"
-            android:layout_height="250dp"
+            android:layout_height="400dp"
             android:layout_marginTop="8dp"
             app:cardElevation="4dp"
             app:cardCornerRadius="8dp">
@@ -118,7 +118,7 @@
                     android:id="@+id/resultImageView"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:scaleType="centerCrop"
+                    android:scaleType="fitCenter"
                     android:contentDescription="Annotated Chess Board"
                     android:background="@color/purple_200" />
 
