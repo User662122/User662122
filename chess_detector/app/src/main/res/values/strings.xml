@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Chess Move Detector</string>
-    <string name="select_first_board">Select First Board Image</string>
-    <string name="select_second_board">Select Second Board Image</string>
-    <string name="detect_move">Detect Move</string>
-    <string name="result_title">Detection Result:</string>
-    <string name="no_image_selected">Please select both images first</string>
-    <string name="processing">Processing images…</string>
-    <string name="select_image">Select Image</string>
+    <string name="app_name">Chess Detector</string>
+    <string name="select_chess_board">📷 Select Chess Board Image</string>
+    <string name="detect_pieces">🎯 Detect Pieces</string>
+    <string name="processing">⏳ Processing... Please wait...</string>
+    <string name="result_title">Results will appear here after detection</string>
+    <string name="no_image_selected">❌ Please select a chess board image first!</string>
 </resources>

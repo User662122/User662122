@@ -1,7 +1,6 @@
 package com.chessmove.detector
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -26,19 +25,17 @@ import java.io.InputStream
 class MainActivity : AppCompatActivity() {
     
     private lateinit var binding: ActivityMainBinding
-    private var bitmap1: Bitmap? = null
-    private var bitmap2: Bitmap? = null
-    private var selectingImageNumber = 1
+    private var inputBitmap: Bitmap? = null
     
     companion object {
-        private const val TAG = "ChessMoveDetector"
+        private const val TAG = "ChessDetector"
     }
     
     private val pickImageLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            loadImageFromUri(it, selectingImageNumber)
+            loadImageFromUri(it)
         }
     }
     
@@ -69,18 +66,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        binding.selectImage1Button.setOnClickListener {
-            selectingImageNumber = 1
-            checkPermissionAndPickImage()
-        }
-        
-        binding.selectImage2Button.setOnClickListener {
-            selectingImageNumber = 2
+        binding.selectImageButton.setOnClickListener {
             checkPermissionAndPickImage()
         }
         
         binding.detectButton.setOnClickListener {
-            detectMove()
+            detectPieces()
         }
     }
     
@@ -105,34 +96,30 @@ class MainActivity : AppCompatActivity() {
         pickImageLauncher.launch("image/*")
     }
     
-    private fun loadImageFromUri(uri: Uri, imageNumber: Int) {
+    private fun loadImageFromUri(uri: Uri) {
         try {
             val inputStream: InputStream? = contentResolver.openInputStream(uri)
             val bitmap = BitmapFactory.decodeStream(inputStream)
             inputStream?.close()
             
-            if (imageNumber == 1) {
-                bitmap1 = bitmap
-                binding.imageView1.setImageBitmap(bitmap)
-                binding.placeholder1.visibility = View.GONE
-            } else {
-                bitmap2 = bitmap
-                binding.imageView2.setImageBitmap(bitmap)
-                binding.placeholder2.visibility = View.GONE
-            }
+            inputBitmap = bitmap
+            binding.inputImageView.setImageBitmap(bitmap)
+            binding.placeholderInput.visibility = View.GONE
+            binding.resultImageView.setImageBitmap(null)
+            binding.placeholderResult.visibility = View.VISIBLE
+            binding.resultText.text = getString(R.string.result_title)
             
-            Toast.makeText(this, "Image $imageNumber loaded", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Image loaded successfully", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e(TAG, "Error loading image", e)
             Toast.makeText(this, "Error loading image", Toast.LENGTH_SHORT).show()
         }
     }
     
-    private fun detectMove() {
-        val img1 = bitmap1
-        val img2 = bitmap2
+    private fun detectPieces() {
+        val img = inputBitmap
         
-        if (img1 == null || img2 == null) {
+        if (img == null) {
             Toast.makeText(this, getString(R.string.no_image_selected), Toast.LENGTH_SHORT).show()
             return
         }
@@ -142,59 +129,53 @@ class MainActivity : AppCompatActivity() {
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val state1 = getBoardStateFromBitmap(img1, "First Board")
-                val state2 = getBoardStateFromBitmap(img2, "Second Board")
+                val boardState = getBoardStateFromBitmap(img, "Chess Board")
                 
-                val result = if (state1 != null && state2 != null) {
-                    val moves = detectUciMoves(state1, state2)
+                if (boardState != null) {
+                    val resultText = buildString {
+                        appendLine("♟️ CHESS PIECE DETECTOR ♟️")
+                        appendLine()
+                        appendLine("Sensitivity Settings:")
+                        appendLine("  White=$WHITE_DETECTION_SENSITIVITY")
+                        appendLine("  Black=$BLACK_DETECTION_SENSITIVITY")
+                        appendLine("  Empty=$EMPTY_DETECTION_SENSITIVITY")
+                        appendLine()
+                        appendLine("--- DETECTED PIECES ---")
+                        appendLine()
+                        appendLine("✅ White Pieces: ${boardState.white.size}")
+                        appendLine("Positions: ${boardState.white.sorted()}")
+                        appendLine()
+                        appendLine("✅ Black Pieces: ${boardState.black.size}")
+                        appendLine("Positions: ${boardState.black.sorted()}")
+                        appendLine()
+                        appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
+                        appendLine()
+                        appendLine("📷 Annotated image displayed below")
+                        appendLine("   White squares = White pieces")
+                        appendLine("   Black squares = Black pieces")
+                    }
                     
-                    buildString {
-                        appendLine("♟️ CHESS MOVE DETECTOR ♟️")
-                        appendLine()
-                        appendLine("Sensitivity: White=$WHITE_DETECTION_SENSITIVITY, Black=$BLACK_DETECTION_SENSITIVITY, Empty=$EMPTY_DETECTION_SENSITIVITY")
-                        appendLine()
-                        appendLine("--- First Board ---")
-                        appendLine("✅ ${state1.white.size} white, ${state1.black.size} black pieces")
-                        appendLine("White pieces: ${state1.white.sorted()}")
-                        appendLine("Black pieces: ${state1.black.sorted()}")
-                        appendLine()
-                        appendLine("--- Second Board ---")
-                        appendLine("✅ ${state2.white.size} white, ${state2.black.size} black pieces")
-                        appendLine("White pieces: ${state2.white.sorted()}")
-                        appendLine("Black pieces: ${state2.black.sorted()}")
-                        appendLine()
-                        appendLine("--- MOVE DETECTION RESULTS ---")
-                        if (moves.isNotEmpty()) {
-                            appendLine("🎯 DETECTED MOVES:")
-                            moves.forEach { move ->
-                                appendLine("   $move")
-                            }
-                        } else {
-                            appendLine("❌ No clear moves detected")
-                            val white1 = state1.white
-                            val black1 = state1.black
-                            val white2 = state2.white
-                            val black2 = state2.black
-                            val whiteMoved = white1 - white2
-                            val blackMoved = black1 - black2
-                            val whiteAppeared = white2 - white1
-                            val blackAppeared = black2 - black1
-                            appendLine("   White changes: ${whiteMoved.sorted()} -> ${whiteAppeared.sorted()}")
-                            appendLine("   Black changes: ${blackMoved.sorted()} -> ${blackAppeared.sorted()}")
+                    withContext(Dispatchers.Main) {
+                        binding.resultText.text = resultText
+                        
+                        // Display annotated image
+                        boardState.annotatedBoard?.let { annotatedBitmap ->
+                            binding.resultImageView.setImageBitmap(annotatedBitmap)
+                            binding.placeholderResult.visibility = View.GONE
                         }
+                        
+                        binding.detectButton.isEnabled = true
+                        Toast.makeText(this@MainActivity, "Detection complete!", Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    "❌ Failed to process one or both boards.\n" +
-                    "Please ensure the images contain clear chessboards."
-                }
-                
-                withContext(Dispatchers.Main) {
-                    binding.resultText.text = result
-                    binding.detectButton.isEnabled = true
+                    withContext(Dispatchers.Main) {
+                        binding.resultText.text = "❌ Failed to process board.\nPlease ensure the image contains a clear chessboard."
+                        binding.detectButton.isEnabled = true
+                    }
                 }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error detecting move", e)
+                Log.e(TAG, "Error detecting pieces", e)
                 withContext(Dispatchers.Main) {
                     binding.resultText.text = "Error: ${e.message}"
                     binding.detectButton.isEnabled = true
