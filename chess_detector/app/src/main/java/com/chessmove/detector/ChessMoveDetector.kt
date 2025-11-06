@@ -69,14 +69,16 @@ private fun detectLargestSquareLike(img: Mat): Pair<Mat, MatOfPoint?> {
     for (c in contours) {
         val peri = Imgproc.arcLength(c, true)
         val approx = MatOfPoint2f()
-        Imgproc.approxPolyDP(MatOfPoint2f(*c.toArray()), approx, 0.02 * peri, true)
+        val c2f = MatOfPoint2f()
+        c.convertTo(c2f, CvType.CV_32F)
+        Imgproc.approxPolyDP(c2f, approx, 0.02 * peri, true)
         
         val area = Imgproc.contourArea(c)
         if (approx.rows() == 4 && area > 0.2 * imgArea) {
-            val rect = Imgproc.boundingRect(approx)
+            val rect = Imgproc.boundingRect(approx.toMatOfPoint())
             val ratio = rect.width.toDouble() / rect.height
             if (ratio in 0.7..1.3 && area > bestArea) {
-                best = MatOfPoint(*approx.toArray())
+                best = approx.toMatOfPoint()
                 bestArea = area
             }
         }
@@ -271,10 +273,10 @@ private fun detectPiecesOnBoard(
 
 // Helper function to calculate standard deviation
 private fun getStdDev(mat: Mat): Double {
-    val mean = Scalar(0.0)
-    val stddev = Scalar(0.0)
+    val mean = MatOfDouble()
+    val stddev = MatOfDouble()
     Core.meanStdDev(mat, mean, stddev)
-    return stddev.`val`[0]
+    return stddev.toArray()[0]
 }
 
 // Helper function to calculate median
@@ -285,6 +287,15 @@ private fun median(list: List<Double>): Double {
     } else {
         sorted[sorted.size / 2]
     }
+}
+
+// Extension function to convert MatOfPoint2f to MatOfPoint
+private fun MatOfPoint2f.toMatOfPoint(): MatOfPoint {
+    val points = this.toArray()
+    val intPoints = points.map { Point(it.x, it.y) }.toTypedArray()
+    val result = MatOfPoint()
+    result.fromArray(*intPoints)
+    return result
 }
 
 // Main function to get board state from bitmap
