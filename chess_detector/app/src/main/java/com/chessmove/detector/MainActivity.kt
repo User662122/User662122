@@ -1,9 +1,13 @@
 package com.chessmove.detector
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     
     companion object {
         private const val TAG = "ChessDetector"
+        private const val PREFS_NAME = "chess_detector"
     }
     
     private val pickImageLauncher = registerForActivityResult(
@@ -60,6 +65,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    // Screen capture permission launcher
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            if (data != null) {
+                // Save permission for notification button use
+                saveScreenCapturePermission(result.resultCode, data)
+                Toast.makeText(this, "Screen capture permission granted!", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -87,6 +108,11 @@ class MainActivity : AppCompatActivity() {
         
         // Start notification service
         checkNotificationPermissionAndStart()
+        
+        // Check if we need to request screen capture permission
+        if (intent.getBooleanExtra("request_capture", false)) {
+            requestScreenCapturePermission()
+        }
     }
     
     private fun checkNotificationPermissionAndStart() {
@@ -110,6 +136,30 @@ class MainActivity : AppCompatActivity() {
     private fun startNotificationService() {
         ChessDetectorService.startService(this)
         Log.d(TAG, "Notification service started")
+        
+        // Request screen capture permission on first launch
+        val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val hasPermission = sharedPrefs.contains(NotificationReceiver.EXTRA_RESULT_CODE)
+        
+        if (!hasPermission) {
+            Toast.makeText(this, "Please grant screen capture permission", Toast.LENGTH_LONG).show()
+            requestScreenCapturePermission()
+        }
+    }
+    
+    private fun requestScreenCapturePermission() {
+        val mediaProjectionManager =
+            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+    }
+    
+    private fun saveScreenCapturePermission(resultCode: Int, data: Intent) {
+        val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sharedPrefs.edit().apply {
+            putInt(NotificationReceiver.EXTRA_RESULT_CODE, resultCode)
+            putString(NotificationReceiver.EXTRA_DATA, data.toUri(0))
+            apply()
+        }
     }
     
     override fun onDestroy() {
