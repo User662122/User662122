@@ -49,6 +49,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    // Notification permission launcher for Android 13+
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startNotificationService()
+        } else {
+            Toast.makeText(this, "Notification permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -73,6 +84,38 @@ class MainActivity : AppCompatActivity() {
         binding.detectButton.setOnClickListener {
             detectPieces()
         }
+        
+        // Start notification service
+        checkNotificationPermissionAndStart()
+    }
+    
+    private fun checkNotificationPermissionAndStart() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when {
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+                    startNotificationService()
+                }
+                else -> {
+                    requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        } else {
+            startNotificationService()
+        }
+    }
+    
+    private fun startNotificationService() {
+        ChessDetectorService.startService(this)
+        Log.d(TAG, "Notification service started")
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        // Optional: Stop service when app is destroyed
+        // ChessDetectorService.stopService(this)
     }
     
     private fun checkPermissionAndPickImage() {
