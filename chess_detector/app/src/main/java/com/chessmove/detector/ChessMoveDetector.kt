@@ -13,9 +13,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 // --- SENSITIVITY CONTROLS ---
-private const val WHITE_DETECTION_SENSITIVITY = 95
-private const val BLACK_DETECTION_SENSITIVITY = 50  
-private const val EMPTY_DETECTION_SENSITIVITY = 50
+const val WHITE_DETECTION_SENSITIVITY = 95
+const val BLACK_DETECTION_SENSITIVITY = 50  
+const val EMPTY_DETECTION_SENSITIVITY = 50
 
 data class BoardState(
     val white: Set<String>,
