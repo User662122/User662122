@@ -9,6 +9,7 @@
     <!-- Foreground Service Permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     
     <!-- Notification Permission for Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -32,7 +33,7 @@
             </intent-filter>
         </activity>
         
-        <!-- Foreground Service -->
+        <!-- Foreground Service for Notification -->
         <service
             android:name=".ChessDetectorService"
             android:enabled="true"
@@ -41,6 +42,14 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Chess piece detection monitoring" />
+        </service>
+        
+        <!-- Foreground Service for Screen Capture -->
+        <service
+            android:name=".ScreenCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection">
         </service>
         
         <!-- Broadcast Receiver for notification button -->
