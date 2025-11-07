@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.opencv.core.Point
 import java.nio.ByteBuffer
 
 class ScreenCaptureService : Service() {
@@ -37,6 +38,7 @@ class ScreenCaptureService : Service() {
     private var screenDensity = 0
     
     private var previousBoardState: BoardState? = null
+    private var cachedBoardCorners: Array<Point>? = null  // NEW: Cache board corners
     private var isCapturing = false
     private var captureCount = 0
 
@@ -131,7 +133,13 @@ class ScreenCaptureService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        val displayText = if (count > 0) "$text (Capture #$count)" else text
+        val displayText = if (count > 0) {
+            if (cachedBoardCorners != null) {
+                "$text (Capture #$count - Optimized)"
+            } else {
+                "$text (Capture #$count)"
+            }
+        } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("â™Ÿï¸ Chess Detector")
@@ -187,11 +195,18 @@ class ScreenCaptureService : Service() {
         isCapturing = true
         captureCount = 0
         previousBoardState = null
+        cachedBoardCorners = null  // Reset cache
         
         CoroutineScope(Dispatchers.IO).launch {
             while (isCapturing && captureCount < MAX_CAPTURES) {
                 captureCount++
-                Log.d(TAG, "ðŸ“¸ Capture #$captureCount")
+                
+                val statusMessage = if (cachedBoardCorners != null) {
+                    "ðŸš€ Fast capture #$captureCount"
+                } else {
+                    "ðŸ“¸ Initial capture #$captureCount"
+                }
+                Log.d(TAG, statusMessage)
                 
                 val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, createNotification("Monitoring...", captureCount))
@@ -246,7 +261,23 @@ class ScreenCaptureService : Service() {
 
     private fun processAndCompare(bitmap: Bitmap) {
         try {
-            val currentBoardState = getBoardStateFromBitmap(bitmap, "Capture #$captureCount")
+            val currentBoardState = if (cachedBoardCorners != null) {
+                // Use optimized path with cached corners
+                Log.d(TAG, "ðŸš€ Using cached corners for fast processing")
+                getBoardStateFromBitmapWithCachedCorners(bitmap, cachedBoardCorners!!, "Capture #$captureCount")
+            } else {
+                // First capture - detect board and cache corners
+                Log.d(TAG, "ðŸ” First detection - finding board...")
+                val state = getBoardStateFromBitmap(bitmap, "Capture #$captureCount")
+                
+                // Cache the corners for future use
+                if (state?.boardCorners != null) {
+                    cachedBoardCorners = state.boardCorners
+                    Log.d(TAG, "âœ… Board corners cached! Future captures will be faster")
+                    showToast("Board detected! Now optimized for fast tracking")
+                }
+                state
+            }
             
             if (currentBoardState != null) {
                 Log.d(TAG, "âœ… Board detected: ${currentBoardState.white.size} white, ${currentBoardState.black.size} black")
@@ -260,9 +291,16 @@ class ScreenCaptureService : Service() {
                 previousBoardState = currentBoardState
             } else {
                 Log.w(TAG, "âš ï¸ No board detected in capture #$captureCount")
+                // If detection fails, clear cache to retry full detection next time
+                if (cachedBoardCorners != null) {
+                    Log.d(TAG, "ðŸ”„ Clearing cached corners due to detection failure")
+                    cachedBoardCorners = null
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "âŒ Error processing capture #$captureCount", e)
+            // Clear cache on error
+            cachedBoardCorners = null
         }
     }
 
@@ -343,6 +381,7 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isCapturing = false
+        cachedBoardCorners = null  // Clear cache
         try {
             virtualDisplay?.release()
             imageReader?.close()
