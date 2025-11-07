@@ -15,9 +15,8 @@ class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ChessDetectorService.ACTION_START -> {
-                Log.d(TAG, "ðŸ”” Start button clicked from notification")
+                Log.d(TAG, "🔔 Start button clicked from notification")
                 
-                // Open MainActivity to request fresh screen capture permission
                 val mainIntent = Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     putExtra("auto_start_capture", true)
@@ -25,6 +24,18 @@ class NotificationReceiver : BroadcastReceiver() {
                 context.startActivity(mainIntent)
                 
                 Toast.makeText(context, "Opening app to start capture...", Toast.LENGTH_SHORT).show()
+            }
+            
+            ChessDetectorService.ACTION_SET_URL -> {
+                Log.d(TAG, "🔗 Set URL button clicked from notification")
+                
+                val mainIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("show_url_dialog", true)
+                }
+                context.startActivity(mainIntent)
+                
+                Toast.makeText(context, "Opening URL settings...", Toast.LENGTH_SHORT).show()
             }
         }
     }
