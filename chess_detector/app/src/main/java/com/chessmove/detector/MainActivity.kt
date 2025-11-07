@@ -11,7 +11,6 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.widget.Toast
@@ -30,10 +29,10 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var binding: ActivityMainBinding
     private var inputBitmap: Bitmap? = null
+    private var autoStartCapture = false
     
     companion object {
         private const val TAG = "ChessDetector"
-        private const val PREFS_NAME = "chess_detector"
     }
     
     private val pickImageLauncher = registerForActivityResult(
@@ -65,18 +64,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // Screen capture permission launcher
+    // Screen capture permission launcher - now starts service immediately
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val data = result.data
             if (data != null) {
-                // Save permission for notification button use
-                saveScreenCapturePermission(result.resultCode, data)
-                Toast.makeText(this, "Screen capture permission granted!", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "âœ… Screen capture permission granted! Starting service...")
+                
+                // Start service IMMEDIATELY with fresh permission
+                val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+                    putExtra("resultCode", result.resultCode)
+                    putExtra("data", data)
+                }
+                
+                ContextCompat.startForegroundService(this, serviceIntent)
+                Toast.makeText(this, "Screen capture starting in 10 seconds...", Toast.LENGTH_SHORT).show()
+                
+                // Move to background so user can see their chess app
+                moveTaskToBack(true)
             }
         } else {
+            Log.e(TAG, "âŒ Screen capture permission denied")
             Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
         }
     }
@@ -109,8 +119,17 @@ class MainActivity : AppCompatActivity() {
         // Start notification service
         checkNotificationPermissionAndStart()
         
-        // Check if we need to request screen capture permission
-        if (intent.getBooleanExtra("request_capture", false)) {
+        // Check if we should auto-start screen capture
+        autoStartCapture = intent.getBooleanExtra("auto_start_capture", false)
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        
+        // If coming from notification, start screen capture immediately
+        if (autoStartCapture) {
+            autoStartCapture = false
+            Log.d(TAG, "ðŸŽ¬ Auto-starting screen capture from notification")
             requestScreenCapturePermission()
         }
     }
@@ -136,36 +155,18 @@ class MainActivity : AppCompatActivity() {
     private fun startNotificationService() {
         ChessDetectorService.startService(this)
         Log.d(TAG, "Notification service started")
-        
-        // Request screen capture permission on first launch
-        val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val hasPermission = sharedPrefs.contains(NotificationReceiver.EXTRA_RESULT_CODE)
-        
-        if (!hasPermission) {
-            Toast.makeText(this, "Please grant screen capture permission", Toast.LENGTH_LONG).show()
-            requestScreenCapturePermission()
-        }
     }
     
     private fun requestScreenCapturePermission() {
+        Log.d(TAG, "ðŸ“± Requesting screen capture permission...")
         val mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }
     
-    private fun saveScreenCapturePermission(resultCode: Int, data: Intent) {
-        val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        sharedPrefs.edit().apply {
-            putInt(NotificationReceiver.EXTRA_RESULT_CODE, resultCode)
-            putString(NotificationReceiver.EXTRA_DATA, data.toUri(0))
-            apply()
-        }
-    }
-    
     override fun onDestroy() {
         super.onDestroy()
-        // Optional: Stop service when app is destroyed
-        // ChessDetectorService.stopService(this)
+        // Keep service running even when activity is destroyed
     }
     
     private fun checkPermissionAndPickImage() {
@@ -226,7 +227,7 @@ class MainActivity : AppCompatActivity() {
                 
                 if (boardState != null) {
                     val resultText = buildString {
-                        appendLine("♟️ CHESS PIECE DETECTOR ♟️")
+                        appendLine("â™Ÿï¸ CHESS PIECE DETECTOR â™Ÿï¸")
                         appendLine()
                         appendLine("Sensitivity Settings:")
                         appendLine("  White=$WHITE_DETECTION_SENSITIVITY")
@@ -235,15 +236,15 @@ class MainActivity : AppCompatActivity() {
                         appendLine()
                         appendLine("--- DETECTED PIECES ---")
                         appendLine()
-                        appendLine("✅ White Pieces: ${boardState.white.size}")
+                        appendLine("âœ… White Pieces: ${boardState.white.size}")
                         appendLine("Positions: ${boardState.white.sorted()}")
                         appendLine()
-                        appendLine("✅ Black Pieces: ${boardState.black.size}")
+                        appendLine("âœ… Black Pieces: ${boardState.black.size}")
                         appendLine("Positions: ${boardState.black.sorted()}")
                         appendLine()
                         appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
                         appendLine()
-                        appendLine("📷 Annotated image displayed below")
+                        appendLine("ðŸ“· Annotated image displayed below")
                         appendLine("   White squares = White pieces")
                         appendLine("   Black squares = Black pieces")
                     }
@@ -262,7 +263,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        binding.resultText.text = "❌ Failed to process board.\nPlease ensure the image contains a clear chessboard."
+                        binding.resultText.text = "âŒ Failed to process board.\nPlease ensure the image contains a clear chessboard."
                         binding.detectButton.isEnabled = true
                     }
                 }
