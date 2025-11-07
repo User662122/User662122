@@ -41,6 +41,8 @@ class ScreenCaptureService : Service() {
     private var cachedBoardCorners: Array<Point>? = null  // NEW: Cache board corners
     private var isCapturing = false
     private var captureCount = 0
+    private var stableStateCounter = 0  // Count how many times we see same state
+    private var lastStableState: BoardState? = null  // Last confirmed stable state
 
     companion object {
         const val NOTIFICATION_ID = 2
