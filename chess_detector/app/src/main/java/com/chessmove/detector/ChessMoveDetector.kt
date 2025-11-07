@@ -10,10 +10,10 @@ import org.opencv.imgproc.Imgproc
 import kotlin.math.max
 import kotlin.math.min
 
-// Sensitivity controls - Slightly stricter to reduce false negatives
-const val WHITE_DETECTION_SENSITIVITY = 92  // Reduced from 95
-const val BLACK_DETECTION_SENSITIVITY = 55  // Increased from 50
-const val EMPTY_DETECTION_SENSITIVITY = 45  // Reduced from 50
+// Sensitivity controls - More relaxed to detect pieces more easily
+const val WHITE_DETECTION_SENSITIVITY = 100  // Increased from original 95 (more relaxed)
+const val BLACK_DETECTION_SENSITIVITY = 45   // Decreased from original 50 (more relaxed)
+const val EMPTY_DETECTION_SENSITIVITY = 55   // Increased from original 50 (more relaxed)
 
 data class BoardState(
     val white: Set<String>,
@@ -206,15 +206,15 @@ private fun detectPiecesOnBoard(
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             
-            // Slightly stricter thresholds
-            var curPosThresh = posBrightDiff + 3  // Added +3 for stricter white detection
-            var curNegThresh = negBrightDiff - 3  // Subtracted 3 for stricter black detection
-            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost + 5  // Added +5
+            // More strict thresholds
+            var curPosThresh = posBrightDiff + 6  // Increased from +3 to +6 for stricter white detection
+            var curNegThresh = negBrightDiff - 6  // Increased from -3 to -6 for stricter black detection
+            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost + 10  // Increased from +5 to +10
             
             if (localBgStd > stdBgThresh) {
-                curPosThresh += 10  // Increased from 8
-                curNegThresh -= 10  // Increased from 8
-                curEdgeThresh += 30 + whiteEdgeBoost + blackEdgeBoost  // Increased from 25
+                curPosThresh += 15  // Increased from 10
+                curNegThresh -= 15  // Increased from 10
+                curEdgeThresh += 40 + whiteEdgeBoost + blackEdgeBoost  // Increased from 30
             }
             
             val brightMask = Mat()
@@ -230,25 +230,26 @@ private fun detectPiecesOnBoard(
                 pieceDetected = true
                 colorIsWhite = diff > 0 || isVeryBright
             } else {
-                // Stricter conditions for pieces detected by brightness/darkness
+                // More strict conditions for pieces detected by brightness/darkness
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd && edgeCount >= 10) {  // Added edge requirement
+                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd && edgeCount >= 15) {  // Increased from 10 to 15
                         pieceDetected = true
                         colorIsWhite = true
                     }
                 } else if (diff <= curNegThresh) {
-                    if (innerStd >= blackStdThresh && edgeCount >= 8) {  // Added edge requirement
+                    if (innerStd >= blackStdThresh && edgeCount >= 12) {  // Increased from 8 to 12
                         pieceDetected = true
                         colorIsWhite = false
                     }
                 }
             }
             
-            if (pieceDetected && innerStd < 10 && edgeCount < emptyEdgeThresh) {
+            // More strict filtering for false positives
+            if (pieceDetected && innerStd < 12 && edgeCount < emptyEdgeThresh) {  // Changed from 10 to 12
                 pieceDetected = false
             }
             
-            if (pieceDetected && colorIsWhite && brightRatio < 0.03 && innerStd < 15) {
+            if (pieceDetected && colorIsWhite && brightRatio < 0.04 && innerStd < 18) {  // Changed from 0.03 and 15
                 pieceDetected = false
             }
             
