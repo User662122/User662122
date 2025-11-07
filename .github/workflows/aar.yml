@@ -21,20 +21,20 @@ jobs:
 
       - name: Download OpenCV 4.10.0 AAR
         run: |
-          mkdir -p app/libs
-          curl -L -o app/libs/opencv-4.10.0.aar \
+          mkdir -p chess_detector/app/libs
+          curl -L -o chess_detector/app/libs/opencv-4.10.0.aar \
             https://repo1.maven.org/maven2/org/opencv/opencv/4.10.0/opencv-4.10.0.aar
 
       - name: Track .aar with LFS
         run: |
-          echo "app/libs/*.aar filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+          echo "chess_detector/app/libs/*.aar filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
           git add .gitattributes
-          git lfs track "app/libs/*.aar"
+          git lfs track "chess_detector/app/libs/*.aar"
 
       - name: Commit and Push file
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/libs/opencv-4.10.0.aar
+          git add chess_detector/app/libs/opencv-4.10.0.aar
           git commit -m "Add OpenCV 4.10.0 AAR with Git LFS"
           git push
