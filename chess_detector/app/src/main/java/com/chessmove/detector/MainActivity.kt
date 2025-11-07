@@ -2,6 +2,7 @@ package com.chessmove.detector
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -30,6 +32,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var inputBitmap: Bitmap? = null
     private var autoStartCapture = false
+    private var showUrlDialog = false
+    private lateinit var backendClient: BackendClient
     
     companion object {
         private const val TAG = "ChessDetector"
@@ -53,7 +57,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // Notification permission launcher for Android 13+
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -64,16 +67,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // Screen capture permission launcher - now starts service immediately
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val data = result.data
             if (data != null) {
-                Log.d(TAG, "âœ… Screen capture permission granted! Starting service...")
+                Log.d(TAG, "✅ Screen capture permission granted! Starting service...")
                 
-                // Start service IMMEDIATELY with fresh permission
+                // Check if backend URL is set
+                if (!backendClient.hasBackendUrl()) {
+                    Toast.makeText(this, "⚠️ Backend URL not set! Use 'Set URL' in notification", Toast.LENGTH_LONG).show()
+                }
+                
                 val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                     putExtra("resultCode", result.resultCode)
                     putExtra("data", data)
@@ -82,11 +88,10 @@ class MainActivity : AppCompatActivity() {
                 ContextCompat.startForegroundService(this, serviceIntent)
                 Toast.makeText(this, "Screen capture starting in 10 seconds...", Toast.LENGTH_SHORT).show()
                 
-                // Move to background so user can see their chess app
                 moveTaskToBack(true)
             }
         } else {
-            Log.e(TAG, "âŒ Screen capture permission denied")
+            Log.e(TAG, "❌ Screen capture permission denied")
             Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
         }
     }
@@ -95,6 +100,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        
+        backendClient = BackendClient(this)
         
         if (OpenCVLoader.initDebug()) {
             Log.i(TAG, "OpenCV loaded successfully with initDebug()")
@@ -116,22 +123,126 @@ class MainActivity : AppCompatActivity() {
             detectPieces()
         }
         
-        // Start notification service
         checkNotificationPermissionAndStart()
         
-        // Check if we should auto-start screen capture
         autoStartCapture = intent.getBooleanExtra("auto_start_capture", false)
+        showUrlDialog = intent.getBooleanExtra("show_url_dialog", false)
     }
     
     override fun onResume() {
         super.onResume()
         
-        // If coming from notification, start screen capture immediately
+        // Show URL dialog if requested
+        if (showUrlDialog) {
+            showUrlDialog = false
+            showSetUrlDialog()
+        }
+        
+        // Auto-start screen capture if requested
         if (autoStartCapture) {
             autoStartCapture = false
-            Log.d(TAG, "ðŸŽ¬ Auto-starting screen capture from notification")
+            Log.d(TAG, "🎬 Auto-starting screen capture from notification")
             requestScreenCapturePermission()
         }
+    }
+    
+    private fun showSetUrlDialog() {
+        val input = EditText(this).apply {
+            hint = "Enter ngrok URL (e.g., https://abc123.ngrok.io)"
+            setText(backendClient.getBackendUrl() ?: "")
+            setPadding(50, 40, 50, 40)
+        }
+        
+        AlertDialog.Builder(this)
+            .setTitle("🔗 Set Backend URL")
+            .setMessage("Enter your ngrok public URL:")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val url = input.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                        backendClient.saveBackendUrl(url)
+                        Toast.makeText(this, "✅ Backend URL saved!", Toast.LENGTH_SHORT).show()
+                        Log.d(TAG, "Backend URL set: $url")
+                        
+                        // Show accessibility service reminder
+                        showAccessibilityReminder()
+                    } else {
+                        Toast.makeText(this, "❌ URL must start with http:// or https://", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this, "URL cannot be empty", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Test") { _, _ ->
+                val url = input.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    testBackendConnection(url)
+                } else {
+                    Toast.makeText(this, "Enter URL first", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .show()
+    }
+    
+    private fun testBackendConnection(url: String) {
+        Toast.makeText(this, "Testing connection...", Toast.LENGTH_SHORT).show()
+        
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val testClient = BackendClient(this@MainActivity)
+                testClient.saveBackendUrl(url)
+                
+                val result = testClient.startGame("white")
+                
+                withContext(Dispatchers.Main) {
+                    result.onSuccess { response ->
+                        Toast.makeText(
+                            this@MainActivity,
+                            "✅ Connection successful! Response: $response",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }.onFailure { e ->
+                        Toast.makeText(
+                            this@MainActivity,
+                            "❌ Connection failed: ${e.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "❌ Test failed: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+    
+    private fun showAccessibilityReminder() {
+        AlertDialog.Builder(this)
+            .setTitle("⚙️ Enable Accessibility Service")
+            .setMessage(
+                "To auto-execute moves, you need to enable the Accessibility Service:\n\n" +
+                "1. Go to Settings > Accessibility\n" +
+                "2. Find 'Chess Detector'\n" +
+                "3. Enable it\n\n" +
+                "This allows the app to tap on the chess board for you."
+            )
+            .setPositiveButton("Open Settings") { _, _ ->
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Couldn't open settings", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Later", null)
+            .show()
     }
     
     private fun checkNotificationPermissionAndStart() {
@@ -158,7 +269,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun requestScreenCapturePermission() {
-        Log.d(TAG, "ðŸ“± Requesting screen capture permission...")
+        Log.d(TAG, "📱 Requesting screen capture permission...")
         val mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
@@ -166,7 +277,6 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
-        // Keep service running even when activity is destroyed
     }
     
     private fun checkPermissionAndPickImage() {
@@ -227,7 +337,7 @@ class MainActivity : AppCompatActivity() {
                 
                 if (boardState != null) {
                     val resultText = buildString {
-                        appendLine("â™Ÿï¸ CHESS PIECE DETECTOR â™Ÿï¸")
+                        appendLine("♟️ CHESS PIECE DETECTOR ♟️")
                         appendLine()
                         appendLine("Sensitivity Settings:")
                         appendLine("  White=$WHITE_DETECTION_SENSITIVITY")
@@ -236,15 +346,15 @@ class MainActivity : AppCompatActivity() {
                         appendLine()
                         appendLine("--- DETECTED PIECES ---")
                         appendLine()
-                        appendLine("âœ… White Pieces: ${boardState.white.size}")
+                        appendLine("✅ White Pieces: ${boardState.white.size}")
                         appendLine("Positions: ${boardState.white.sorted()}")
                         appendLine()
-                        appendLine("âœ… Black Pieces: ${boardState.black.size}")
+                        appendLine("✅ Black Pieces: ${boardState.black.size}")
                         appendLine("Positions: ${boardState.black.sorted()}")
                         appendLine()
                         appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
                         appendLine()
-                        appendLine("ðŸ“· Annotated image displayed below")
+                        appendLine("📷 Annotated image displayed below")
                         appendLine("   White squares = White pieces")
                         appendLine("   Black squares = Black pieces")
                     }
@@ -252,7 +362,6 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         binding.resultText.text = resultText
                         
-                        // Display annotated image
                         boardState.annotatedBoard?.let { annotatedBitmap ->
                             binding.resultImageView.setImageBitmap(annotatedBitmap)
                             binding.placeholderResult.visibility = View.GONE
@@ -263,7 +372,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        binding.resultText.text = "âŒ Failed to process board.\nPlease ensure the image contains a clear chessboard."
+                        binding.resultText.text = "❌ Failed to process board.\nPlease ensure the image contains a clear chessboard."
                         binding.detectButton.isEnabled = true
                     }
                 }
