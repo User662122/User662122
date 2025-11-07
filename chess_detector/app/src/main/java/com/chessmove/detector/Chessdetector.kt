@@ -13,6 +13,7 @@ class ChessDetectorService : Service() {
         const val CHANNEL_ID = "ChessDetectorChannel"
         const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.chessmove.detector.ACTION_START"
+        const val ACTION_SET_URL = "com.chessmove.detector.ACTION_SET_URL"
         
         fun startService(context: Context) {
             val intent = Intent(context, ChessDetectorService::class.java)
@@ -59,7 +60,6 @@ class ChessDetectorService : Service() {
     }
 
     private fun createNotification(): Notification {
-        // Intent to open MainActivity when notification is tapped
         val mainIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -70,7 +70,6 @@ class ChessDetectorService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Intent for Start button
         val startIntent = Intent(this, NotificationReceiver::class.java).apply {
             action = ACTION_START
         }
@@ -78,6 +77,17 @@ class ChessDetectorService : Service() {
             this,
             1,
             startIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        // NEW: Set URL action
+        val setUrlIntent = Intent(this, NotificationReceiver::class.java).apply {
+            action = ACTION_SET_URL
+        }
+        val setUrlPendingIntent = PendingIntent.getBroadcast(
+            this,
+            2,
+            setUrlIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
@@ -91,7 +101,12 @@ class ChessDetectorService : Service() {
                 "Start",
                 startPendingIntent
             )
-            .setOngoing(true) // Makes notification persistent
+            .addAction(
+                android.R.drawable.ic_menu_edit,
+                "Set URL",
+                setUrlPendingIntent
+            )
+            .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(false)
             .build()
