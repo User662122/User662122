@@ -19,7 +19,8 @@ data class BoardState(
     val white: Set<String>,
     val black: Set<String>,
     val annotatedBoard: Bitmap? = null,
-    val boardCorners: Array<Point>? = null  // Store board corners for reuse
+    val boardCorners: Array<Point>? = null,  // Store board corners for reuse
+    val whiteOnBottom: Boolean? = null  // NEW: Store orientation for reuse
 )
 
 private fun normalizeSensitivity(sensitivity: Int): Double {
@@ -206,15 +207,15 @@ private fun detectPiecesOnBoard(
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             
-            // More strict thresholds
-            var curPosThresh = posBrightDiff + 6  // Increased from +3 to +6 for stricter white detection
-            var curNegThresh = negBrightDiff - 6  // Increased from -3 to -6 for stricter black detection
-            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost + 10  // Increased from +5 to +10
+            // More relaxed thresholds to detect pieces easier
+            var curPosThresh = posBrightDiff - 3  // Subtract 3 to make white detection easier
+            var curNegThresh = negBrightDiff + 3  // Add 3 to make black detection easier  
+            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost - 5  // Subtract 5 to require fewer edges
             
             if (localBgStd > stdBgThresh) {
-                curPosThresh += 15  // Increased from 10
-                curNegThresh -= 15  // Increased from 10
-                curEdgeThresh += 40 + whiteEdgeBoost + blackEdgeBoost  // Increased from 30
+                curPosThresh += 5   // Reduced from original 8 (less strict)
+                curNegThresh -= 5   // Reduced from original 8 (less strict)
+                curEdgeThresh += 20 + whiteEdgeBoost + blackEdgeBoost  // Reduced from original 25
             }
             
             val brightMask = Mat()
@@ -230,26 +231,26 @@ private fun detectPiecesOnBoard(
                 pieceDetected = true
                 colorIsWhite = diff > 0 || isVeryBright
             } else {
-                // More strict conditions for pieces detected by brightness/darkness
+                // More relaxed conditions - easier to detect pieces
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd && edgeCount >= 15) {  // Increased from 10 to 15
+                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd) {  // No edge requirement - easier detection
                         pieceDetected = true
                         colorIsWhite = true
                     }
                 } else if (diff <= curNegThresh) {
-                    if (innerStd >= blackStdThresh && edgeCount >= 12) {  // Increased from 8 to 12
+                    if (innerStd >= blackStdThresh) {  // No edge requirement - easier detection
                         pieceDetected = true
                         colorIsWhite = false
                     }
                 }
             }
             
-            // More strict filtering for false positives
-            if (pieceDetected && innerStd < 12 && edgeCount < emptyEdgeThresh) {  // Changed from 10 to 12
+            // More relaxed filtering - allow more detections
+            if (pieceDetected && innerStd < 8 && edgeCount < emptyEdgeThresh) {  // Reduced from 10 to 8 (less filtering)
                 pieceDetected = false
             }
             
-            if (pieceDetected && colorIsWhite && brightRatio < 0.04 && innerStd < 18) {  // Changed from 0.03 and 15
+            if (pieceDetected && colorIsWhite && brightRatio < 0.02 && innerStd < 12) {  // Reduced thresholds (less filtering)
                 pieceDetected = false
             }
             
