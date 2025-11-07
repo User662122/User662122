@@ -10,10 +10,10 @@ import org.opencv.imgproc.Imgproc
 import kotlin.math.max
 import kotlin.math.min
 
-// Sensitivity controls
-const val WHITE_DETECTION_SENSITIVITY = 95
-const val BLACK_DETECTION_SENSITIVITY = 50
-const val EMPTY_DETECTION_SENSITIVITY = 50
+// Sensitivity controls - Slightly stricter to reduce false negatives
+const val WHITE_DETECTION_SENSITIVITY = 92  // Reduced from 95
+const val BLACK_DETECTION_SENSITIVITY = 55  // Increased from 50
+const val EMPTY_DETECTION_SENSITIVITY = 45  // Reduced from 50
 
 data class BoardState(
     val white: Set<String>,
@@ -206,14 +206,15 @@ private fun detectPiecesOnBoard(
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             
-            var curPosThresh = posBrightDiff
-            var curNegThresh = negBrightDiff
-            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost
+            // Slightly stricter thresholds
+            var curPosThresh = posBrightDiff + 3  // Added +3 for stricter white detection
+            var curNegThresh = negBrightDiff - 3  // Subtracted 3 for stricter black detection
+            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost + 5  // Added +5
             
             if (localBgStd > stdBgThresh) {
-                curPosThresh += 8
-                curNegThresh -= 8
-                curEdgeThresh += 25 + whiteEdgeBoost + blackEdgeBoost
+                curPosThresh += 10  // Increased from 8
+                curNegThresh -= 10  // Increased from 8
+                curEdgeThresh += 30 + whiteEdgeBoost + blackEdgeBoost  // Increased from 25
             }
             
             val brightMask = Mat()
@@ -229,13 +230,14 @@ private fun detectPiecesOnBoard(
                 pieceDetected = true
                 colorIsWhite = diff > 0 || isVeryBright
             } else {
+                // Stricter conditions for pieces detected by brightness/darkness
                 if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd) {
+                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd && edgeCount >= 10) {  // Added edge requirement
                         pieceDetected = true
                         colorIsWhite = true
                     }
                 } else if (diff <= curNegThresh) {
-                    if (innerStd >= blackStdThresh) {
+                    if (innerStd >= blackStdThresh && edgeCount >= 8) {  // Added edge requirement
                         pieceDetected = true
                         colorIsWhite = false
                     }
