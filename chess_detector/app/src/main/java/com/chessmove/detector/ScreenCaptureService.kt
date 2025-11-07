@@ -35,11 +35,17 @@ class ScreenCaptureService : Service() {
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
+    
+    private var previousBoardState: BoardState? = null
+    private var isCapturing = false
+    private var captureCount = 0
 
     companion object {
         const val NOTIFICATION_ID = 2
         const val CHANNEL_ID = "ScreenCaptureChannel"
         const val TAG = "ScreenCaptureService"
+        const val MAX_CAPTURES = 100 // Stop after 100 captures (5 minutes)
+        const val CAPTURE_INTERVAL = 3000L // 3 seconds
     }
 
     override fun onCreate() {
@@ -65,22 +71,21 @@ class ScreenCaptureService : Service() {
             Log.d(TAG, "ResultCode: $resultCode (RESULT_OK=-1), Data exists: ${data != null}")
 
             if (resultCode == Activity.RESULT_OK && data != null) {
-                startForeground(NOTIFICATION_ID, createNotification("Starting..."))
+                startForeground(NOTIFICATION_ID, createNotification("Starting...", 0))
                 
-                // Setup media projection immediately
                 try {
                     setupMediaProjection(resultCode, data)
                     
-                    // Wait 10 seconds in coroutine, then capture
+                    // Wait 10 seconds, then start continuous capture
                     CoroutineScope(Dispatchers.Main).launch {
                         for (i in 10 downTo 1) {
                             Log.d(TAG, "â° Countdown: $i seconds...")
                             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                            notificationManager.notify(NOTIFICATION_ID, createNotification("Capturing in $i seconds..."))
+                            notificationManager.notify(NOTIFICATION_ID, createNotification("Starting in $i seconds...", 0))
                             delay(1000)
                         }
-                        Log.d(TAG, "ðŸŽ¬ Starting capture now!")
-                        captureScreen()
+                        Log.d(TAG, "ðŸŽ¬ Starting continuous capture!")
+                        startContinuousCapture()
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "âŒ Error setting up media projection", e)
@@ -115,12 +120,25 @@ class ScreenCaptureService : Service() {
         Log.d(TAG, "âœ… Notification channel created")
     }
 
-    private fun createNotification(text: String): Notification {
+    private fun createNotification(text: String, count: Int): Notification {
+        val stopIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            action = "STOP_CAPTURE"
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            0,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val displayText = if (count > 0) "$text (Capture #$count)" else text
+        
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("â™Ÿï¸ Chess Detector")
-            .setContentText(text)
+            .setContentText(displayText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_delete, "Stop", stopPendingIntent)
             .setAutoCancel(false)
             .build()
     }
@@ -165,58 +183,52 @@ class ScreenCaptureService : Service() {
         Log.d(TAG, "âœ… Media projection setup complete!")
     }
 
-    private fun captureScreen() {
-        Log.d(TAG, "ðŸ“¸ Attempting to capture screen...")
+    private fun startContinuousCapture() {
+        isCapturing = true
+        captureCount = 0
+        previousBoardState = null
         
-        try {
-            // Update notification
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.notify(NOTIFICATION_ID, createNotification("Capturing..."))
-            
-            // Give a moment for the display to stabilize
-            Thread.sleep(500)
-            Log.d(TAG, "â±ï¸ Stabilization delay complete")
-            
-            val image = imageReader?.acquireLatestImage()
-            
-            if (image != null) {
-                Log.d(TAG, "âœ… Image captured! Size: ${image.width}x${image.height}, Format: ${image.format}")
-                val bitmap = imageToBitmap(image)
-                image.close()
-                Log.d(TAG, "âœ… Converted to bitmap: ${bitmap.width}x${bitmap.height}")
+        CoroutineScope(Dispatchers.IO).launch {
+            while (isCapturing && captureCount < MAX_CAPTURES) {
+                captureCount++
+                Log.d(TAG, "ðŸ“¸ Capture #$captureCount")
                 
-                notificationManager.notify(NOTIFICATION_ID, createNotification("Processing..."))
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.notify(NOTIFICATION_ID, createNotification("Monitoring...", captureCount))
                 
-                // Process the bitmap
-                processChessBoard(bitmap)
-            } else {
-                Log.e(TAG, "âŒ Failed to acquire image - image is null")
+                captureAndCompare()
                 
-                // Try one more time after a delay
-                Log.d(TAG, "ðŸ”„ Retrying after 1 second...")
-                Thread.sleep(1000)
-                val retryImage = imageReader?.acquireLatestImage()
-                
-                if (retryImage != null) {
-                    Log.d(TAG, "âœ… Retry successful!")
-                    val bitmap = imageToBitmap(retryImage)
-                    retryImage.close()
-                    processChessBoard(bitmap)
-                } else {
-                    Log.e(TAG, "âŒ Retry failed - still no image")
-                    showToast("Screen capture failed - no image available")
-                    stopSelf()
-                }
+                delay(CAPTURE_INTERVAL)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "âŒ Error capturing screen", e)
-            showToast("Capture error: ${e.message}")
+            
+            if (captureCount >= MAX_CAPTURES) {
+                showToast("Stopped after $MAX_CAPTURES captures")
+            }
             stopSelf()
         }
     }
 
+    private fun captureAndCompare() {
+        try {
+            Thread.sleep(200) // Small stabilization delay
+            
+            val image = imageReader?.acquireLatestImage()
+            
+            if (image != null) {
+                val bitmap = imageToBitmap(image)
+                image.close()
+                
+                // Process the bitmap
+                processAndCompare(bitmap)
+            } else {
+                Log.w(TAG, "âš ï¸ No image available on capture #$captureCount")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "âŒ Error in capture #$captureCount", e)
+        }
+    }
+
     private fun imageToBitmap(image: Image): Bitmap {
-        Log.d(TAG, "ðŸ–¼ï¸ Converting Image to Bitmap...")
         val planes = image.planes
         val buffer: ByteBuffer = planes[0].buffer
         val pixelStride = planes[0].pixelStride
@@ -229,40 +241,95 @@ class ScreenCaptureService : Service() {
             Bitmap.Config.ARGB_8888
         )
         bitmap.copyPixelsFromBuffer(buffer)
-        val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
-        Log.d(TAG, "âœ… Bitmap conversion complete")
-        return finalBitmap
+        return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
 
-    private fun processChessBoard(bitmap: Bitmap) {
-        Log.d(TAG, "â™Ÿï¸ Starting chess board processing...")
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val boardState = getBoardStateFromBitmap(bitmap, "Screen Capture")
+    private fun processAndCompare(bitmap: Bitmap) {
+        try {
+            val currentBoardState = getBoardStateFromBitmap(bitmap, "Capture #$captureCount")
+            
+            if (currentBoardState != null) {
+                Log.d(TAG, "âœ… Board detected: ${currentBoardState.white.size} white, ${currentBoardState.black.size} black")
                 
-                if (boardState != null) {
-                    val whiteList = boardState.white.sorted().joinToString(", ")
-                    val blackList = boardState.black.sorted().joinToString(", ")
-                    
-                    Log.d(TAG, "âœ… Detection successful!")
-                    Log.d(TAG, "âšª White pieces (${boardState.white.size}): $whiteList")
-                    Log.d(TAG, "âš« Black pieces (${boardState.black.size}): $blackList")
-                    
-                    val message = "White pieces at: $whiteList\nBlack pieces at: $blackList"
-                    showToast(message)
+                if (previousBoardState != null) {
+                    detectAndShowMoves(previousBoardState!!, currentBoardState)
                 } else {
-                    Log.e(TAG, "âŒ No chess board found in captured image")
-                    showToast("No chess board found in screen")
+                    Log.d(TAG, "ðŸ“ First board state saved")
                 }
                 
-            } catch (e: Exception) {
-                Log.e(TAG, "âŒ Processing error", e)
-                showToast("Processing error: ${e.message}")
-            } finally {
-                Log.d(TAG, "ðŸ›‘ Stopping service...")
-                handler.postDelayed({
-                    stopSelf()
-                }, 2000)
+                previousBoardState = currentBoardState
+            } else {
+                Log.w(TAG, "âš ï¸ No board detected in capture #$captureCount")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "âŒ Error processing capture #$captureCount", e)
+        }
+    }
+
+    private fun detectAndShowMoves(oldState: BoardState, newState: BoardState) {
+        val whiteMoved = oldState.white - newState.white
+        val whiteAppeared = newState.white - oldState.white
+        val blackMoved = oldState.black - newState.black
+        val blackAppeared = newState.black - oldState.black
+        
+        val moves = mutableListOf<String>()
+        
+        // Detect white move
+        if (whiteMoved.size == 1 && whiteAppeared.size == 1) {
+            val from = whiteMoved.first()
+            val to = whiteAppeared.first()
+            moves.add("White moved: $from$to")
+            Log.d(TAG, "âšª White: $from â†’ $to")
+        } else if (whiteMoved.size == 1 && whiteAppeared.size == 0 && blackMoved.size == 1) {
+            // White captured black
+            val from = whiteMoved.first()
+            val to = blackMoved.first()
+            moves.add("White captured: $from$to")
+            Log.d(TAG, "âšª White captured: $from â†’ $to")
+        }
+        
+        // Detect black move
+        if (blackMoved.size == 1 && blackAppeared.size == 1) {
+            val from = blackMoved.first()
+            val to = blackAppeared.first()
+            moves.add("Black moved: $from$to")
+            Log.d(TAG, "âš« Black: $from â†’ $to")
+        } else if (blackMoved.size == 1 && blackAppeared.size == 0 && whiteMoved.size == 1) {
+            // Black captured white
+            val from = blackMoved.first()
+            val to = whiteMoved.first()
+            moves.add("Black captured: $from$to")
+            Log.d(TAG, "âš« Black captured: $from â†’ $to")
+        }
+        
+        // Detect castling
+        if (whiteMoved.size == 2 && whiteAppeared.size == 2) {
+            val sorted = whiteMoved.sorted()
+            if (sorted.any { it.startsWith("e") }) {
+                moves.add("White castled")
+                Log.d(TAG, "âšª White castled")
+            }
+        }
+        if (blackMoved.size == 2 && blackAppeared.size == 2) {
+            val sorted = blackMoved.sorted()
+            if (sorted.any { it.startsWith("e") }) {
+                moves.add("Black castled")
+                Log.d(TAG, "âš« Black castled")
+            }
+        }
+        
+        // Show detected moves
+        if (moves.isNotEmpty()) {
+            val message = moves.joinToString("\n")
+            showToast(message)
+            Log.d(TAG, "ðŸŽ¯ Moves detected: $message")
+        } else {
+            // Check if board changed but no clear move detected
+            if (whiteMoved.isNotEmpty() || whiteAppeared.isNotEmpty() || 
+                blackMoved.isNotEmpty() || blackAppeared.isNotEmpty()) {
+                Log.d(TAG, "âš ï¸ Board changed but no clear move pattern")
+                Log.d(TAG, "  White: moved=$whiteMoved, appeared=$whiteAppeared")
+                Log.d(TAG, "  Black: moved=$blackMoved, appeared=$blackAppeared")
             }
         }
     }
@@ -270,12 +337,12 @@ class ScreenCaptureService : Service() {
     private fun showToast(message: String) {
         handler.post {
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            Log.d(TAG, "ðŸ’¬ Toast: $message")
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        isCapturing = false
         try {
             virtualDisplay?.release()
             imageReader?.close()
