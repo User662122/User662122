@@ -10,17 +10,17 @@ import org.opencv.imgproc.Imgproc
 import kotlin.math.max
 import kotlin.math.min
 
-// Sensitivity controls - More relaxed to detect pieces more easily
-const val WHITE_DETECTION_SENSITIVITY = 100  // Increased from original 95 (more relaxed)
-const val BLACK_DETECTION_SENSITIVITY = 45   // Decreased from original 50 (more relaxed)
-const val EMPTY_DETECTION_SENSITIVITY = 55   // Increased from original 50 (more relaxed)
+// SIGNIFICANTLY MORE RELAXED - Detect pieces much easier
+const val WHITE_DETECTION_SENSITIVITY = 115  // Increased from 100 (more relaxed)
+const val BLACK_DETECTION_SENSITIVITY = 35   // Decreased from 45 (more relaxed)
+const val EMPTY_DETECTION_SENSITIVITY = 65   // Increased from 55 (more relaxed)
 
 data class BoardState(
     val white: Set<String>,
     val black: Set<String>,
     val annotatedBoard: Bitmap? = null,
-    val boardCorners: Array<Point>? = null,  // Store board corners for reuse
-    val whiteOnBottom: Boolean? = null  // Store orientation for reuse
+    val boardCorners: Array<Point>? = null,
+    val whiteOnBottom: Boolean? = null
 )
 
 private fun normalizeSensitivity(sensitivity: Int): Double {
@@ -98,7 +98,6 @@ private fun detectLargestSquareLike(img: Mat): MatOfPoint2f? {
         }
     }
     
-    // Release temporary mats
     gray.release()
     blurred.release()
     edges.release()
@@ -136,17 +135,18 @@ private fun detectPiecesOnBoard(
     val blackNorm = normalizeSensitivity(BLACK_DETECTION_SENSITIVITY)
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
     
-    val posBrightDiff = max(1.0, 25 - (whiteNorm * 0.2))
-    val minWhiteStd = max(1.0, 30 - (whiteNorm * 0.25))
-    val whiteEdgeBoost = whiteNorm * 0.3
-    val whiteBrightnessThresh = max(100.0, 200 - (whiteNorm * 0.5))
-    val negBrightDiff = min(-1.0, -10 - (blackNorm * 0.2))
-    val blackStdThresh = max(1.0, 5 + (blackNorm * 0.1))
-    val blackEdgeBoost = blackNorm * 0.3
-    val edgeCountThresh = max(5.0, 80 - (emptyNorm * 0.6))
-    val stdBgThresh = max(1.0, 5 + (emptyNorm * 0.15))
-    val maxEmptyStd = max(10.0, 15 + (emptyNorm * 0.25))
-    val emptyEdgeThresh = max(1.0, 20 - (emptyNorm * 0.15))
+    // MUCH MORE RELAXED THRESHOLDS
+    val posBrightDiff = max(0.5, 20 - (whiteNorm * 0.25))  // Reduced from 25
+    val minWhiteStd = max(0.5, 25 - (whiteNorm * 0.3))     // Reduced from 30
+    val whiteEdgeBoost = whiteNorm * 0.4                    // Increased from 0.3
+    val whiteBrightnessThresh = max(90.0, 190 - (whiteNorm * 0.6))  // Reduced from 200
+    val negBrightDiff = min(-0.5, -8 - (blackNorm * 0.25)) // Increased from -10
+    val blackStdThresh = max(0.5, 4 + (blackNorm * 0.08))  // Reduced from 5
+    val blackEdgeBoost = blackNorm * 0.4                    // Increased from 0.3
+    val edgeCountThresh = max(3.0, 70 - (emptyNorm * 0.7)) // Reduced from 80
+    val stdBgThresh = max(0.5, 4 + (emptyNorm * 0.12))     // Reduced from 5
+    val maxEmptyStd = max(12.0, 18 + (emptyNorm * 0.3))    // Increased from 15
+    val emptyEdgeThresh = max(0.5, 18 - (emptyNorm * 0.18)) // Reduced from 20
     
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -199,7 +199,7 @@ private fun detectPiecesOnBoard(
             val innerBlur = Mat()
             Imgproc.GaussianBlur(inner, innerBlur, Size(3.0, 3.0), 0.0)
             val edges = Mat()
-            Imgproc.Canny(innerBlur, edges, 50.0, 150.0)
+            Imgproc.Canny(innerBlur, edges, 40.0, 140.0)  // Reduced from 50/150
             val edgeCount = Core.countNonZero(edges)
             
             val absBrightness = innerMean
@@ -207,51 +207,73 @@ private fun detectPiecesOnBoard(
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             
-            // More relaxed thresholds to detect pieces easier
-            var curPosThresh = posBrightDiff - 3  // Subtract 3 to make white detection easier
-            var curNegThresh = negBrightDiff + 3  // Add 3 to make black detection easier  
-            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost - 5  // Subtract 5 to require fewer edges
+            // EXTREMELY RELAXED - Subtract/Add more to detect easier
+            var curPosThresh = posBrightDiff - 5  // Increased from 3
+            var curNegThresh = negBrightDiff + 5  // Increased from 3
+            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost - 8  // Increased from 5
             
             if (localBgStd > stdBgThresh) {
-                curPosThresh += 5   // Reduced from original 8 (less strict)
-                curNegThresh -= 5   // Reduced from original 8 (less strict)
-                curEdgeThresh += 20 + whiteEdgeBoost + blackEdgeBoost  // Reduced from original 25
+                curPosThresh += 3   // Reduced from 5
+                curNegThresh -= 3   // Reduced from 5
+                curEdgeThresh += 15 + whiteEdgeBoost + blackEdgeBoost  // Reduced from 20
             }
             
             val brightMask = Mat()
-            Core.compare(inner, Scalar(200.0), brightMask, Core.CMP_GT)
+            Core.compare(inner, Scalar(190.0), brightMask, Core.CMP_GT)  // Reduced from 200
             val brightPixels = Core.countNonZero(brightMask)
             val brightRatio = brightPixels.toDouble() / inner.total()
-            val isSmallBrightSpot = brightRatio < 0.05 && edgeCount < 15 && innerStd < 25 && absBrightness > 180
+            val isSmallBrightSpot = brightRatio < 0.06 && edgeCount < 18 && innerStd < 28 && absBrightness > 170  // More relaxed
             
             var pieceDetected = false
             var colorIsWhite = false
             
+            // PRIMARY DETECTION - With edges
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
                 colorIsWhite = diff > 0 || isVeryBright
-            } else {
-                // More relaxed conditions - easier to detect pieces
-                if ((diff >= curPosThresh || isVeryBright) && !isSmallBrightSpot) {
-                    if (innerStd >= minWhiteStd && innerStd <= maxEmptyStd) {  // No edge requirement - easier detection
+            } 
+            
+            // SECONDARY DETECTION - Without edge requirement (VERY RELAXED)
+            if (!pieceDetected) {
+                // White piece detection - MUCH more relaxed
+                if ((diff >= curPosThresh || isVeryBright || absBrightness > 160) && !isSmallBrightSpot) {
+                    // Accept if EITHER std is high enough OR brightness is high
+                    if (innerStd >= minWhiteStd || absBrightness > 170) {
                         pieceDetected = true
                         colorIsWhite = true
                     }
-                } else if (diff <= curNegThresh) {
-                    if (innerStd >= blackStdThresh) {  // No edge requirement - easier detection
+                } 
+                // Black piece detection - MUCH more relaxed
+                else if (diff <= curNegThresh || absBrightness < 120) {
+                    // Accept if std shows variation OR brightness is dark enough
+                    if (innerStd >= blackStdThresh || absBrightness < 110) {
                         pieceDetected = true
                         colorIsWhite = false
                     }
                 }
             }
             
-            // More relaxed filtering - allow more detections
-            if (pieceDetected && innerStd < 8 && edgeCount < emptyEdgeThresh) {  // Reduced from 10 to 8 (less filtering)
+            // TERTIARY DETECTION - Edge-based fallback (NEW)
+            if (!pieceDetected && edgeCount >= (curEdgeThresh * 0.7)) {  // 70% of edge threshold
+                if (innerStd > 3) {  // Any variation at all
+                    pieceDetected = true
+                    colorIsWhite = absBrightness > 130  // Simple brightness check
+                }
+            }
+            
+            // MUCH MORE RELAXED FILTERING - Allow more detections
+            if (pieceDetected && innerStd < 6 && edgeCount < (emptyEdgeThresh * 0.8)) {  // Reduced from 8, 80%
                 pieceDetected = false
             }
             
-            if (pieceDetected && colorIsWhite && brightRatio < 0.02 && innerStd < 12) {  // Reduced thresholds (less filtering)
+            if (pieceDetected && colorIsWhite && brightRatio < 0.015 && innerStd < 10) {  // More relaxed
                 pieceDetected = false
+            }
+            
+            // FINAL CHECK - Don't reject dark pieces too easily
+            if (!pieceDetected && absBrightness < 100 && innerStd > 8) {
+                pieceDetected = true
+                colorIsWhite = false
             }
             
             if (pieceDetected) {
@@ -266,7 +288,6 @@ private fun detectPiecesOnBoard(
                 }
             }
             
-            // Release temporary mats
             innerBlur.release()
             edges.release()
             brightMask.release()
@@ -277,7 +298,6 @@ private fun detectPiecesOnBoard(
         }
     }
     
-    // Convert Mat to Bitmap for Android
     val bitmap = Bitmap.createBitmap(annotated.cols(), annotated.rows(), Bitmap.Config.ARGB_8888)
     Utils.matToBitmap(annotated, bitmap)
     annotated.release()
@@ -285,16 +305,14 @@ private fun detectPiecesOnBoard(
     return BoardState(whiteSquares.toSet(), blackSquares.toSet(), bitmap, null)
 }
 
-// NEW: Process with pre-cached board corners AND orientation (skip detection AND orientation check)
 fun getBoardStateFromBitmapWithCachedCorners(
     bitmap: Bitmap, 
     cachedCorners: Array<Point>,
     boardName: String,
-    cachedWhiteOnBottom: Boolean  // NEW: Accept cached orientation
+    cachedWhiteOnBottom: Boolean
 ): BoardState? {
     Log.d("ChessDetector", "Processing board with cached corners AND orientation...")
     
-    // Convert Bitmap to Mat
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
     Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
@@ -305,7 +323,6 @@ fun getBoardStateFromBitmapWithCachedCorners(
         return null
     }
     
-    // Resize image (same as original)
     val resized = Mat()
     val aspectRatio = img.width().toDouble() / img.height()
     val newWidth = 900
@@ -313,7 +330,6 @@ fun getBoardStateFromBitmapWithCachedCorners(
     Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
     img.release()
     
-    // Use cached corners directly - skip detection!
     val side = 800
     val srcMat = MatOfPoint2f(*cachedCorners)
     val dstMat = MatOfPoint2f(
@@ -332,8 +348,6 @@ fun getBoardStateFromBitmapWithCachedCorners(
     M.release()
     
     val cellSize = side / 8
-    
-    // Use cached orientation instead of checking again!
     val whiteOnBottom = cachedWhiteOnBottom
     
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
@@ -352,11 +366,9 @@ fun getBoardStateFromBitmapWithCachedCorners(
     return boardState
 }
 
-// Original function - now returns corners AND orientation for caching
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "Processing board (first detection)...")
     
-    // Convert Bitmap to Mat
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
     Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
@@ -367,7 +379,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
         return null
     }
     
-    // Resize image
     val resized = Mat()
     val aspectRatio = img.width().toDouble() / img.height()
     val newWidth = 900
@@ -435,6 +446,5 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // Return with cached corners AND orientation
     return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom)
 }
