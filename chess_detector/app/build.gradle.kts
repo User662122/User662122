@@ -62,7 +62,11 @@ dependencies {
     // ✅ Local OpenCV AAR (app/libs/opencv-4.10.0.aar)
     implementation(files("libs/opencv-4.10.0.aar"))
 
+    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // ✅ NEW: OkHttp for backend communication
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
