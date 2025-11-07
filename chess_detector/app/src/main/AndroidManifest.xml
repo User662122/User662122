@@ -6,13 +6,17 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     
-    <!-- Foreground Service Permission -->
+    <!-- Foreground Service Permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     
-    <!-- Notification Permission for Android 13+ -->
+    <!-- Notification Permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    
+    <!-- ✅ Internet permission for backend communication -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <application
         android:allowBackup="true"
@@ -21,6 +25,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.ChessMoveDetector"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
         
         <activity
@@ -52,7 +57,21 @@
             android:foregroundServiceType="mediaProjection">
         </service>
         
-        <!-- Broadcast Receiver for notification button -->
+        <!-- ✅ NEW: Accessibility Service for Auto-Tap -->
+        <service
+            android:name=".AutoTapExecutor"
+            android:enabled="true"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+        
+        <!-- Broadcast Receiver for notification buttons -->
         <receiver
             android:name=".NotificationReceiver"
             android:enabled="true"
