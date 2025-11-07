@@ -38,18 +38,17 @@ class ScreenCaptureService : Service() {
     private var screenDensity = 0
     
     private var previousBoardState: BoardState? = null
-    private var cachedBoardCorners: Array<Point>? = null  // NEW: Cache board corners
+    private var cachedBoardCorners: Array<Point>? = null
+    private var cachedOrientation: Boolean? = null  // NEW: Cache orientation (whiteOnBottom)
     private var isCapturing = false
     private var captureCount = 0
-    private var stableStateCounter = 0  // Count how many times we see same state
-    private var lastStableState: BoardState? = null  // Last confirmed stable state
 
     companion object {
         const val NOTIFICATION_ID = 2
         const val CHANNEL_ID = "ScreenCaptureChannel"
         const val TAG = "ScreenCaptureService"
-        const val MAX_CAPTURES = 100 // Stop after 100 captures (5 minutes)
-        const val CAPTURE_INTERVAL = 3000L // 3 seconds
+        const val MAX_CAPTURES = 100
+        const val CAPTURE_INTERVAL = 3000L
     }
 
     override fun onCreate() {
@@ -80,7 +79,6 @@ class ScreenCaptureService : Service() {
                 try {
                     setupMediaProjection(resultCode, data)
                     
-                    // Wait 10 seconds, then start continuous capture
                     CoroutineScope(Dispatchers.Main).launch {
                         for (i in 10 downTo 1) {
                             Log.d(TAG, "â° Countdown: $i seconds...")
@@ -136,7 +134,9 @@ class ScreenCaptureService : Service() {
         )
         
         val displayText = if (count > 0) {
-            if (cachedBoardCorners != null) {
+            if (cachedBoardCorners != null && cachedOrientation != null) {
+                "$text (Capture #$count - Fully Optimized)"  // Both cached!
+            } else if (cachedBoardCorners != null) {
                 "$text (Capture #$count - Optimized)"
             } else {
                 "$text (Capture #$count)"
@@ -197,13 +197,16 @@ class ScreenCaptureService : Service() {
         isCapturing = true
         captureCount = 0
         previousBoardState = null
-        cachedBoardCorners = null  // Reset cache
+        cachedBoardCorners = null
+        cachedOrientation = null  // Reset orientation cache
         
         CoroutineScope(Dispatchers.IO).launch {
             while (isCapturing && captureCount < MAX_CAPTURES) {
                 captureCount++
                 
-                val statusMessage = if (cachedBoardCorners != null) {
+                val statusMessage = if (cachedBoardCorners != null && cachedOrientation != null) {
+                    "ðŸš€ Fully optimized capture #$captureCount"
+                } else if (cachedBoardCorners != null) {
                     "ðŸš€ Fast capture #$captureCount"
                 } else {
                     "ðŸ“¸ Initial capture #$captureCount"
@@ -227,7 +230,7 @@ class ScreenCaptureService : Service() {
 
     private fun captureAndCompare() {
         try {
-            Thread.sleep(200) // Small stabilization delay
+            Thread.sleep(200)
             
             val image = imageReader?.acquireLatestImage()
             
@@ -235,7 +238,6 @@ class ScreenCaptureService : Service() {
                 val bitmap = imageToBitmap(image)
                 image.close()
                 
-                // Process the bitmap
                 processAndCompare(bitmap)
             } else {
                 Log.w(TAG, "âš ï¸ No image available on capture #$captureCount")
@@ -263,20 +265,27 @@ class ScreenCaptureService : Service() {
 
     private fun processAndCompare(bitmap: Bitmap) {
         try {
-            val currentBoardState = if (cachedBoardCorners != null) {
-                // Use optimized path with cached corners
-                Log.d(TAG, "ðŸš€ Using cached corners for fast processing")
-                getBoardStateFromBitmapWithCachedCorners(bitmap, cachedBoardCorners!!, "Capture #$captureCount")
+            val currentBoardState = if (cachedBoardCorners != null && cachedOrientation != null) {
+                // FULLY OPTIMIZED: Use cached corners AND orientation
+                Log.d(TAG, "ðŸš€ Using cached corners AND orientation for maximum speed")
+                getBoardStateFromBitmapWithCachedCorners(
+                    bitmap, 
+                    cachedBoardCorners!!, 
+                    "Capture #$captureCount",
+                    cachedOrientation!!  // Pass cached orientation
+                )
             } else {
-                // First capture - detect board and cache corners
-                Log.d(TAG, "ðŸ” First detection - finding board...")
+                // First capture - detect board, cache corners AND orientation
+                Log.d(TAG, "ðŸ” First detection - finding board and orientation...")
                 val state = getBoardStateFromBitmap(bitmap, "Capture #$captureCount")
                 
-                // Cache the corners for future use
-                if (state?.boardCorners != null) {
+                // Cache BOTH corners and orientation for future use
+                if (state?.boardCorners != null && state.whiteOnBottom != null) {
                     cachedBoardCorners = state.boardCorners
-                    Log.d(TAG, "âœ… Board corners cached! Future captures will be faster")
-                    showToast("Board detected! Now optimized for fast tracking")
+                    cachedOrientation = state.whiteOnBottom  // Cache orientation!
+                    Log.d(TAG, "âœ… Board corners AND orientation cached!")
+                    Log.d(TAG, "   Orientation: ${if (cachedOrientation == true) "White on bottom" else "Black on bottom"}")
+                    showToast("Board detected! Now fully optimized")
                 }
                 state
             }
@@ -294,15 +303,16 @@ class ScreenCaptureService : Service() {
             } else {
                 Log.w(TAG, "âš ï¸ No board detected in capture #$captureCount")
                 // If detection fails, clear cache to retry full detection next time
-                if (cachedBoardCorners != null) {
-                    Log.d(TAG, "ðŸ”„ Clearing cached corners due to detection failure")
+                if (cachedBoardCorners != null || cachedOrientation != null) {
+                    Log.d(TAG, "ðŸ”„ Clearing cached data due to detection failure")
                     cachedBoardCorners = null
+                    cachedOrientation = null
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "âŒ Error processing capture #$captureCount", e)
-            // Clear cache on error
             cachedBoardCorners = null
+            cachedOrientation = null
         }
     }
 
@@ -321,7 +331,6 @@ class ScreenCaptureService : Service() {
             moves.add("White moved: $from$to")
             Log.d(TAG, "âšª White: $from â†’ $to")
         } else if (whiteMoved.size == 1 && whiteAppeared.size == 0 && blackMoved.size == 1) {
-            // White captured black
             val from = whiteMoved.first()
             val to = blackMoved.first()
             moves.add("White captured: $from$to")
@@ -335,7 +344,6 @@ class ScreenCaptureService : Service() {
             moves.add("Black moved: $from$to")
             Log.d(TAG, "âš« Black: $from â†’ $to")
         } else if (blackMoved.size == 1 && blackAppeared.size == 0 && whiteMoved.size == 1) {
-            // Black captured white
             val from = blackMoved.first()
             val to = whiteMoved.first()
             moves.add("Black captured: $from$to")
@@ -358,13 +366,11 @@ class ScreenCaptureService : Service() {
             }
         }
         
-        // Show detected moves
         if (moves.isNotEmpty()) {
             val message = moves.joinToString("\n")
             showToast(message)
             Log.d(TAG, "ðŸŽ¯ Moves detected: $message")
         } else {
-            // Check if board changed but no clear move detected
             if (whiteMoved.isNotEmpty() || whiteAppeared.isNotEmpty() || 
                 blackMoved.isNotEmpty() || blackAppeared.isNotEmpty()) {
                 Log.d(TAG, "âš ï¸ Board changed but no clear move pattern")
@@ -383,7 +389,8 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isCapturing = false
-        cachedBoardCorners = null  // Clear cache
+        cachedBoardCorners = null
+        cachedOrientation = null  // Clear orientation cache
         try {
             virtualDisplay?.release()
             imageReader?.close()
