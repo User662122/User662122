@@ -18,7 +18,8 @@ const val EMPTY_DETECTION_SENSITIVITY = 50
 data class BoardState(
     val white: Set<String>,
     val black: Set<String>,
-    val annotatedBoard: Bitmap? = null
+    val annotatedBoard: Bitmap? = null,
+    val boardCorners: Array<Point>? = null  // Store board corners for reuse
 )
 
 private fun normalizeSensitivity(sensitivity: Int): Double {
@@ -277,11 +278,91 @@ private fun detectPiecesOnBoard(
     Utils.matToBitmap(annotated, bitmap)
     annotated.release()
     
-    return BoardState(whiteSquares.toSet(), blackSquares.toSet(), bitmap)
+    return BoardState(whiteSquares.toSet(), blackSquares.toSet(), bitmap, null)
 }
 
+// NEW: Process with pre-cached board corners (skip detection)
+fun getBoardStateFromBitmapWithCachedCorners(
+    bitmap: Bitmap, 
+    cachedCorners: Array<Point>,
+    boardName: String
+): BoardState? {
+    Log.d("ChessDetector", "Processing board with cached corners...")
+    
+    // Convert Bitmap to Mat
+    val img = Mat()
+    Utils.bitmapToMat(bitmap, img)
+    Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
+    
+    if (img.empty()) {
+        Log.e("ChessDetector", "Could not load image")
+        img.release()
+        return null
+    }
+    
+    // Resize image (same as original)
+    val resized = Mat()
+    val aspectRatio = img.width().toDouble() / img.height()
+    val newWidth = 900
+    val newHeight = (newWidth / aspectRatio).toInt()
+    Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
+    img.release()
+    
+    // Use cached corners directly - skip detection!
+    val side = 800
+    val srcMat = MatOfPoint2f(*cachedCorners)
+    val dstMat = MatOfPoint2f(
+        Point(0.0, 0.0),
+        Point((side - 1).toDouble(), 0.0),
+        Point((side - 1).toDouble(), (side - 1).toDouble()),
+        Point(0.0, (side - 1).toDouble())
+    )
+    
+    val M = Imgproc.getPerspectiveTransform(srcMat, dstMat)
+    val boardWarped = Mat()
+    Imgproc.warpPerspective(resized, boardWarped, M, Size(side.toDouble(), side.toDouble()))
+    resized.release()
+    srcMat.release()
+    dstMat.release()
+    M.release()
+    
+    val cellSize = side / 8
+    val topLeftSquare = boardWarped.submat(0, cellSize, 0, cellSize)
+    val bottomRightSquare = boardWarped.submat(7 * cellSize, 8 * cellSize, 7 * cellSize, 8 * cellSize)
+    
+    val topLeftGray = Mat()
+    val bottomRightGray = Mat()
+    Imgproc.cvtColor(topLeftSquare, topLeftGray, Imgproc.COLOR_BGR2GRAY)
+    Imgproc.cvtColor(bottomRightSquare, bottomRightGray, Imgproc.COLOR_BGR2GRAY)
+    
+    val meanTop = Core.mean(topLeftGray).`val`[0]
+    val meanBottom = Core.mean(bottomRightGray).`val`[0]
+    val whiteOnBottom = meanBottom > meanTop
+    
+    topLeftSquare.release()
+    bottomRightSquare.release()
+    topLeftGray.release()
+    bottomRightGray.release()
+    
+    val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
+    val ranks = if (whiteOnBottom) "87654321" else "12345678"
+    
+    val grayBoard = Mat()
+    Imgproc.cvtColor(boardWarped, grayBoard, Imgproc.COLOR_BGR2GRAY)
+    
+    val boardState = detectPiecesOnBoard(grayBoard, boardWarped, files, ranks, cellSize)
+    
+    grayBoard.release()
+    boardWarped.release()
+    
+    Log.d("ChessDetector", "âœ… Detected (cached): ${boardState.white.size} white, ${boardState.black.size} black pieces")
+    
+    return boardState
+}
+
+// Original function - now returns corners for caching
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
-    Log.d("ChessDetector", "Processing board...")
+    Log.d("ChessDetector", "Processing board (first detection)...")
     
     // Convert Bitmap to Mat
     val img = Mat()
@@ -362,5 +443,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    return boardState
+    // Return with cached corners
+    return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered)
 }
