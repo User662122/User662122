@@ -20,7 +20,7 @@ data class BoardState(
     val black: Set<String>,
     val annotatedBoard: Bitmap? = null,
     val boardCorners: Array<Point>? = null,  // Store board corners for reuse
-    val whiteOnBottom: Boolean? = null  // NEW: Store orientation for reuse
+    val whiteOnBottom: Boolean? = null  // Store orientation for reuse
 )
 
 private fun normalizeSensitivity(sensitivity: Int): Double {
@@ -285,13 +285,14 @@ private fun detectPiecesOnBoard(
     return BoardState(whiteSquares.toSet(), blackSquares.toSet(), bitmap, null)
 }
 
-// NEW: Process with pre-cached board corners (skip detection)
+// NEW: Process with pre-cached board corners AND orientation (skip detection AND orientation check)
 fun getBoardStateFromBitmapWithCachedCorners(
     bitmap: Bitmap, 
     cachedCorners: Array<Point>,
-    boardName: String
+    boardName: String,
+    cachedWhiteOnBottom: Boolean  // NEW: Accept cached orientation
 ): BoardState? {
-    Log.d("ChessDetector", "Processing board with cached corners...")
+    Log.d("ChessDetector", "Processing board with cached corners AND orientation...")
     
     // Convert Bitmap to Mat
     val img = Mat()
@@ -331,22 +332,9 @@ fun getBoardStateFromBitmapWithCachedCorners(
     M.release()
     
     val cellSize = side / 8
-    val topLeftSquare = boardWarped.submat(0, cellSize, 0, cellSize)
-    val bottomRightSquare = boardWarped.submat(7 * cellSize, 8 * cellSize, 7 * cellSize, 8 * cellSize)
     
-    val topLeftGray = Mat()
-    val bottomRightGray = Mat()
-    Imgproc.cvtColor(topLeftSquare, topLeftGray, Imgproc.COLOR_BGR2GRAY)
-    Imgproc.cvtColor(bottomRightSquare, bottomRightGray, Imgproc.COLOR_BGR2GRAY)
-    
-    val meanTop = Core.mean(topLeftGray).`val`[0]
-    val meanBottom = Core.mean(bottomRightGray).`val`[0]
-    val whiteOnBottom = meanBottom > meanTop
-    
-    topLeftSquare.release()
-    bottomRightSquare.release()
-    topLeftGray.release()
-    bottomRightGray.release()
+    // Use cached orientation instead of checking again!
+    val whiteOnBottom = cachedWhiteOnBottom
     
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
@@ -359,12 +347,12 @@ fun getBoardStateFromBitmapWithCachedCorners(
     grayBoard.release()
     boardWarped.release()
     
-    Log.d("ChessDetector", "âœ… Detected (cached): ${boardState.white.size} white, ${boardState.black.size} black pieces")
+    Log.d("ChessDetector", "âœ… Detected (fully cached): ${boardState.white.size} white, ${boardState.black.size} black pieces")
     
     return boardState
 }
 
-// Original function - now returns corners for caching
+// Original function - now returns corners AND orientation for caching
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "Processing board (first detection)...")
     
@@ -447,6 +435,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // Return with cached corners
-    return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered)
+    // Return with cached corners AND orientation
+    return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom)
 }
