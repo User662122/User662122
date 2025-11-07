@@ -6,4 +6,11 @@
     <string name="processing">⏳ Processing... Please wait...</string>
     <string name="result_title">Results will appear here after detection</string>
     <string name="no_image_selected">❌ Please select a chess board image first!</string>
+    
+    <!-- ✅ NEW: Accessibility service description -->
+    <string name="accessibility_service_description">
+        Allows Chess Detector to automatically tap on the chess board to execute moves.
+        This service is required for autonomous gameplay.\n\n
+        No other accessibility features are used - only touch gestures on your screen.
+    </string>
 </resources>
