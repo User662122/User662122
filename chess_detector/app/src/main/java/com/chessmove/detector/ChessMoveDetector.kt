@@ -47,8 +47,7 @@ private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double = 0.95): MatOf
     return MatOfPoint2f(*shrunk)
 }
 
-// ✅ FIXED: Calculate coordinates by applying INVERSE perspective transform
-// This maps warped board coordinates (800x800) back to screen coordinates
+// ✅ FIXED: Use OpenCV's perspectiveTransform to map all 64 squares at once
 private fun calculateUciToScreenCoordinates(
     boardCorners: Array<Point>,
     whiteOnBottom: Boolean
@@ -58,54 +57,66 @@ private fun calculateUciToScreenCoordinates(
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
     
-    // Create transformation matrices
     val side = 800.0
     val cellSize = side / 8.0
     
-    // Source: warped board corners (800x800)
-    val srcMat = MatOfPoint2f(
-        Point(0.0, 0.0),                // Top-left
-        Point(side - 1, 0.0),           // Top-right
-        Point(side - 1, side - 1),      // Bottom-right
-        Point(0.0, side - 1)            // Bottom-left
-    )
+    // Prepare all 64 points on the warped board (800x800)
+    val warpedPoints = mutableListOf<Point>()
+    val uciLabels = mutableListOf<String>()
     
-    // Destination: original screen corners
-    val dstMat = MatOfPoint2f(*boardCorners)
-    
-    // Get INVERSE perspective transform (warped -> screen)
-    val inverseM = Imgproc.getPerspectiveTransform(srcMat, dstMat)
-    
-    // Calculate for each square
     for (rankIndex in 0 until 8) {
         for (fileIndex in 0 until 8) {
             val uci = "${files[fileIndex]}${ranks[rankIndex]}"
             
-            // Center of square on warped board (800x800)
+            // Center of square on warped board
             val warpedX = (fileIndex + 0.5) * cellSize
             val warpedY = (rankIndex + 0.5) * cellSize
             
-            // Transform warped coordinates to screen coordinates
-            val warpedPoint = MatOfPoint2f(Point(warpedX, warpedY))
-            val screenPoint = MatOfPoint2f()
-            Core.perspectiveTransform(warpedPoint, screenPoint, inverseM)
-            
-            val screenCoords = screenPoint.toArray()[0]
-            coordinatesMap[uci] = android.graphics.Point(
-                screenCoords.x.toInt(),
-                screenCoords.y.toInt()
-            )
-            
-            Log.d("ChessDetector", "UCI $uci -> Warped: (${warpedX.toInt()}, ${warpedY.toInt()}) -> Screen: (${screenCoords.x.toInt()}, ${screenCoords.y.toInt()})")
-            
-            warpedPoint.release()
-            screenPoint.release()
+            warpedPoints.add(Point(warpedX, warpedY))
+            uciLabels.add(uci)
         }
     }
     
+    // Create source and destination matrices for perspective transform
+    val srcMat = MatOfPoint2f(
+        Point(0.0, 0.0),           // Top-left
+        Point(side, 0.0),          // Top-right
+        Point(side, side),         // Bottom-right
+        Point(0.0, side)           // Bottom-left
+    )
+    
+    val dstMat = MatOfPoint2f(*boardCorners)
+    
+    // Get perspective transform matrix (warped -> screen)
+    val transformMatrix = Imgproc.getPerspectiveTransform(srcMat, dstMat)
+    
+    // Transform all 64 points at once using OpenCV
+    val warpedPointsMat = MatOfPoint2f(*warpedPoints.toTypedArray())
+    val screenPointsMat = MatOfPoint2f()
+    
+    Core.perspectiveTransform(warpedPointsMat, screenPointsMat, transformMatrix)
+    
+    // Extract transformed screen coordinates
+    val screenPoints = screenPointsMat.toArray()
+    
+    for (i in uciLabels.indices) {
+        val uci = uciLabels[i]
+        val screenPoint = screenPoints[i]
+        
+        coordinatesMap[uci] = android.graphics.Point(
+            screenPoint.x.toInt(),
+            screenPoint.y.toInt()
+        )
+        
+        Log.d("ChessDetector", "UCI $uci -> Warped: (${warpedPoints[i].x.toInt()}, ${warpedPoints[i].y.toInt()}) -> Screen: (${screenPoint.x.toInt()}, ${screenPoint.y.toInt()})")
+    }
+    
+    // Release resources
     srcMat.release()
     dstMat.release()
-    inverseM.release()
+    transformMatrix.release()
+    warpedPointsMat.release()
+    screenPointsMat.release()
     
     return coordinatesMap
 }
@@ -451,7 +462,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val pts = innerPts.toArray()
     val ordered = orderPoints(pts)
     
-    Log.d("ChessDetector", "Board corners on resized image (excluding wooden frame):")
+    Log.d("ChessDetector", "Board corners on resized image:")
     ordered.forEachIndexed { index, point ->
         Log.d("ChessDetector", "  Corner $index: (${point.x.toInt()}, ${point.y.toInt()})")
     }
@@ -506,8 +517,8 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // ✅ Calculate UCI to screen coordinates using INVERSE perspective transform
-    // Maps from warped board (800x800) back to screen coordinates
+    // ✅ Calculate ALL 64 UCI coordinates using OpenCV's perspectiveTransform
+    Log.d("ChessDetector", "🎯 Calculating screen coordinates for all 64 squares using OpenCV...")
     val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom)
     Log.d("ChessDetector", "✅ Calculated screen coordinates for ${uciCoordinates.size} squares")
     
