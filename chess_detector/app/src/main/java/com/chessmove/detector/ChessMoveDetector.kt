@@ -47,76 +47,106 @@ private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double = 0.95): MatOf
     return MatOfPoint2f(*shrunk)
 }
 
-// ✅ FIXED: Use OpenCV's perspectiveTransform to map all 64 squares at once
-private fun calculateUciToScreenCoordinates(
-    boardCorners: Array<Point>,
-    whiteOnBottom: Boolean
-): Map<String, android.graphics.Point> {
+// ✅ HARDCODED UCI COORDINATES for both orientations
+private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, android.graphics.Point> {
     val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
     
-    val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
-    val ranks = if (whiteOnBottom) "87654321" else "12345678"
-    
-    val side = 800.0
-    val cellSize = side / 8.0
-    
-    // Prepare all 64 points on the warped board (800x800)
-    val warpedPoints = mutableListOf<Point>()
-    val uciLabels = mutableListOf<String>()
-    
-    for (rankIndex in 0 until 8) {
-        for (fileIndex in 0 until 8) {
-            val uci = "${files[fileIndex]}${ranks[rankIndex]}"
-            
-            // Center of square on warped board
-            val warpedX = (fileIndex + 0.5) * cellSize
-            val warpedY = (rankIndex + 0.5) * cellSize
-            
-            warpedPoints.add(Point(warpedX, warpedY))
-            uciLabels.add(uci)
+    if (whiteOnBottom) {
+        // White on bottom (coordinates as provided)
+        val files = "abcdefgh"
+        val xCoords = listOf(54, 141, 229, 316, 404, 491, 579, 666)
+        
+        // Rank 8 (top)
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}8"] = android.graphics.Point(xCoords[i], 547)
+        }
+        
+        // Rank 7
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}7"] = android.graphics.Point(xCoords[i], 634)
+        }
+        
+        // Rank 6
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}6"] = android.graphics.Point(xCoords[i], 721)
+        }
+        
+        // Rank 5
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}5"] = android.graphics.Point(xCoords[i], 809)
+        }
+        
+        // Rank 4
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}4"] = android.graphics.Point(xCoords[i], 896)
+        }
+        
+        // Rank 3
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}3"] = android.graphics.Point(xCoords[i], 983)
+        }
+        
+        // Rank 2
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}2"] = android.graphics.Point(xCoords[i], 1070)
+        }
+        
+        // Rank 1 (bottom)
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}1"] = android.graphics.Point(xCoords[i], 1158)
+        }
+    } else {
+        // Black on bottom (board flipped 180°)
+        val files = "hgfedcba"  // Reversed files
+        val xCoords = listOf(54, 141, 229, 316, 404, 491, 579, 666)
+        
+        // Rank 1 (top when black on bottom)
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}1"] = android.graphics.Point(xCoords[i], 547)
+        }
+        
+        // Rank 2
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}2"] = android.graphics.Point(xCoords[i], 634)
+        }
+        
+        // Rank 3
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}3"] = android.graphics.Point(xCoords[i], 721)
+        }
+        
+        // Rank 4
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}4"] = android.graphics.Point(xCoords[i], 809)
+        }
+        
+        // Rank 5
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}5"] = android.graphics.Point(xCoords[i], 896)
+        }
+        
+        // Rank 6
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}6"] = android.graphics.Point(xCoords[i], 983)
+        }
+        
+        // Rank 7
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}7"] = android.graphics.Point(xCoords[i], 1070)
+        }
+        
+        // Rank 8 (bottom when black on bottom)
+        files.forEachIndexed { i, file ->
+            coordinatesMap["${file}8"] = android.graphics.Point(xCoords[i], 1158)
         }
     }
     
-    // Create source and destination matrices for perspective transform
-    val srcMat = MatOfPoint2f(
-        Point(0.0, 0.0),           // Top-left
-        Point(side, 0.0),          // Top-right
-        Point(side, side),         // Bottom-right
-        Point(0.0, side)           // Bottom-left
-    )
+    Log.d("ChessDetector", "📍 Generated ${coordinatesMap.size} hardcoded coordinates (whiteOnBottom=$whiteOnBottom)")
     
-    val dstMat = MatOfPoint2f(*boardCorners)
-    
-    // Get perspective transform matrix (warped -> screen)
-    val transformMatrix = Imgproc.getPerspectiveTransform(srcMat, dstMat)
-    
-    // Transform all 64 points at once using OpenCV
-    val warpedPointsMat = MatOfPoint2f(*warpedPoints.toTypedArray())
-    val screenPointsMat = MatOfPoint2f()
-    
-    Core.perspectiveTransform(warpedPointsMat, screenPointsMat, transformMatrix)
-    
-    // Extract transformed screen coordinates
-    val screenPoints = screenPointsMat.toArray()
-    
-    for (i in uciLabels.indices) {
-        val uci = uciLabels[i]
-        val screenPoint = screenPoints[i]
-        
-        coordinatesMap[uci] = android.graphics.Point(
-            screenPoint.x.toInt(),
-            screenPoint.y.toInt()
-        )
-        
-        Log.d("ChessDetector", "UCI $uci -> Warped: (${warpedPoints[i].x.toInt()}, ${warpedPoints[i].y.toInt()}) -> Screen: (${screenPoint.x.toInt()}, ${screenPoint.y.toInt()})")
+    // Log sample coordinates for verification
+    coordinatesMap.entries.take(5).forEach { (uci, point) ->
+        Log.d("ChessDetector", "  $uci -> (${point.x}, ${point.y})")
     }
-    
-    // Release resources
-    srcMat.release()
-    dstMat.release()
-    transformMatrix.release()
-    warpedPointsMat.release()
-    screenPointsMat.release()
     
     return coordinatesMap
 }
@@ -517,10 +547,10 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // ✅ Calculate ALL 64 UCI coordinates using OpenCV's perspectiveTransform
-    Log.d("ChessDetector", "🎯 Calculating screen coordinates for all 64 squares using OpenCV...")
-    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom)
-    Log.d("ChessDetector", "✅ Calculated screen coordinates for ${uciCoordinates.size} squares")
+   // âœ… Use hardcoded UCI coordinates based on orientation
+    Log.d("ChessDetector", "ðŸŽ¯ Using HARDCODED screen coordinates (whiteOnBottom=$whiteOnBottom)")
+    val uciCoordinates = getHardcodedUciCoordinates(whiteOnBottom)
+    Log.d("ChessDetector", "âœ… Loaded ${uciCoordinates.size} hardcoded coordinates")
     
     return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom, uciCoordinates)
 }
