@@ -47,50 +47,65 @@ private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double = 0.95): MatOf
     return MatOfPoint2f(*shrunk)
 }
 
-// ✅ FIXED: Calculate coordinates on ORIGINAL screen, not warped board
+// ✅ FIXED: Calculate coordinates by applying INVERSE perspective transform
+// This maps warped board coordinates (800x800) back to screen coordinates
 private fun calculateUciToScreenCoordinates(
     boardCorners: Array<Point>,
-    whiteOnBottom: Boolean,
-    originalImageSize: Size  // Pass original image dimensions
+    whiteOnBottom: Boolean
 ): Map<String, android.graphics.Point> {
     val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
     
-    // Board corners are already in the coordinate system of the resized image
-    val topLeft = boardCorners[0]
-    val topRight = boardCorners[1]
-    val bottomRight = boardCorners[2]
-    val bottomLeft = boardCorners[3]
-    
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
+    
+    // Create transformation matrices
+    val side = 800.0
+    val cellSize = side / 8.0
+    
+    // Source: warped board corners (800x800)
+    val srcMat = MatOfPoint2f(
+        Point(0.0, 0.0),                // Top-left
+        Point(side - 1, 0.0),           // Top-right
+        Point(side - 1, side - 1),      // Bottom-right
+        Point(0.0, side - 1)            // Bottom-left
+    )
+    
+    // Destination: original screen corners
+    val dstMat = MatOfPoint2f(*boardCorners)
+    
+    // Get INVERSE perspective transform (warped -> screen)
+    val inverseM = Imgproc.getPerspectiveTransform(srcMat, dstMat)
     
     // Calculate for each square
     for (rankIndex in 0 until 8) {
         for (fileIndex in 0 until 8) {
             val uci = "${files[fileIndex]}${ranks[rankIndex]}"
             
-            // Calculate position as fraction of board (0.0 to 1.0)
-            val fileRatio = (fileIndex + 0.5) / 8.0
-            val rankRatio = (rankIndex + 0.5) / 8.0
+            // Center of square on warped board (800x800)
+            val warpedX = (fileIndex + 0.5) * cellSize
+            val warpedY = (rankIndex + 0.5) * cellSize
             
-            // Use bilinear interpolation to find exact position on original board
-            // Top edge point
-            val topX = topLeft.x + (topRight.x - topLeft.x) * fileRatio
-            val topY = topLeft.y + (topRight.y - topLeft.y) * fileRatio
+            // Transform warped coordinates to screen coordinates
+            val warpedPoint = MatOfPoint2f(Point(warpedX, warpedY))
+            val screenPoint = MatOfPoint2f()
+            Core.perspectiveTransform(warpedPoint, screenPoint, inverseM)
             
-            // Bottom edge point
-            val bottomX = bottomLeft.x + (bottomRight.x - bottomLeft.x) * fileRatio
-            val bottomY = bottomLeft.y + (bottomRight.y - bottomLeft.y) * fileRatio
+            val screenCoords = screenPoint.toArray()[0]
+            coordinatesMap[uci] = android.graphics.Point(
+                screenCoords.x.toInt(),
+                screenCoords.y.toInt()
+            )
             
-            // Interpolate between top and bottom
-            val screenX = topX + (bottomX - topX) * rankRatio
-            val screenY = topY + (bottomY - topY) * rankRatio
+            Log.d("ChessDetector", "UCI $uci -> Warped: (${warpedX.toInt()}, ${warpedY.toInt()}) -> Screen: (${screenCoords.x.toInt()}, ${screenCoords.y.toInt()})")
             
-            coordinatesMap[uci] = android.graphics.Point(screenX.toInt(), screenY.toInt())
-            
-            Log.d("ChessDetector", "UCI $uci -> Screen coordinates: (${screenX.toInt()}, ${screenY.toInt()})")
+            warpedPoint.release()
+            screenPoint.release()
         }
     }
+    
+    srcMat.release()
+    dstMat.release()
+    inverseM.release()
     
     return coordinatesMap
 }
@@ -417,10 +432,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
         return null
     }
     
-    // ✅ Store original size before resizing
-    val originalSize = Size(img.width().toDouble(), img.height().toDouble())
-    Log.d("ChessDetector", "Original image size: ${originalSize.width.toInt()} x ${originalSize.height.toInt()}")
-    
     val resized = Mat()
     val aspectRatio = img.width().toDouble() / img.height()
     val newWidth = 900
@@ -440,7 +451,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val pts = innerPts.toArray()
     val ordered = orderPoints(pts)
     
-    Log.d("ChessDetector", "Board corners on resized image:")
+    Log.d("ChessDetector", "Board corners on resized image (excluding wooden frame):")
     ordered.forEachIndexed { index, point ->
         Log.d("ChessDetector", "  Corner $index: (${point.x.toInt()}, ${point.y.toInt()})")
     }
@@ -495,8 +506,9 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // ✅ Calculate UCI to screen coordinates mapping on RESIZED image (which matches screen capture)
-    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom, Size(newWidth.toDouble(), newHeight.toDouble()))
+    // ✅ Calculate UCI to screen coordinates using INVERSE perspective transform
+    // Maps from warped board (800x800) back to screen coordinates
+    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom)
     Log.d("ChessDetector", "✅ Calculated screen coordinates for ${uciCoordinates.size} squares")
     
     return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom, uciCoordinates)
