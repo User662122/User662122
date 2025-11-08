@@ -45,6 +45,7 @@ class ScreenCaptureService : Service() {
     private var previousBoardState: BoardState? = null
     private var cachedBoardCorners: Array<Point>? = null
     private var cachedOrientation: Boolean? = null
+    private var cachedUciCoordinates: Map<String, android.graphics.Point>? = null
     private var isCapturing = false
     private var captureCount = 0
     
@@ -58,7 +59,7 @@ class ScreenCaptureService : Service() {
     private var consecutiveErrors = 0
     private val maxConsecutiveErrors = 3
     
-    // ✅ NEW: Backend integration
+    // âœ… NEW: Backend integration
     private lateinit var backendClient: BackendClient
     private var gameStarted = false
     private var appColor: String? = null  // "white" or "black"
@@ -88,14 +89,14 @@ class ScreenCaptureService : Service() {
         
         createNotificationChannel()
         startImageProcessor()
-        Log.d(TAG, "✅ Service created. Screen: ${screenWidth}x${screenHeight}, Density: $screenDensity")
+        Log.d(TAG, "âœ… Service created. Screen: ${screenWidth}x${screenHeight}, Density: $screenDensity")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "📱 onStartCommand called")
+        Log.d(TAG, "ðŸ“± onStartCommand called")
         
         if (intent?.action == "STOP_CAPTURE") {
-            Log.d(TAG, "🛑 Stop capture requested")
+            Log.d(TAG, "ðŸ›‘ Stop capture requested")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -114,25 +115,25 @@ class ScreenCaptureService : Service() {
                     
                     CoroutineScope(Dispatchers.Main).launch {
                         for (i in 10 downTo 1) {
-                            Log.d(TAG, "⏰ Countdown: $i seconds...")
+                            Log.d(TAG, "â° Countdown: $i seconds...")
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "🎬 Starting continuous capture!")
+                        Log.d(TAG, "ðŸŽ¬ Starting continuous capture!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Error setting up media projection", e)
+                    Log.e(TAG, "âŒ Error setting up media projection", e)
                     showToast("Setup failed: ${e.message}")
                     stopSelf()
                 }
             } else {
-                Log.e(TAG, "❌ Invalid result code or data is null")
+                Log.e(TAG, "âŒ Invalid result code or data is null")
                 showToast("Invalid screen capture permission")
                 stopSelf()
             }
         } else {
-            Log.e(TAG, "❌ Intent is null")
+            Log.e(TAG, "âŒ Intent is null")
             stopSelf()
         }
         
@@ -151,7 +152,7 @@ class ScreenCaptureService : Service() {
         
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.createNotificationChannel(channel)
-        Log.d(TAG, "✅ Notification channel created")
+        Log.d(TAG, "âœ… Notification channel created")
     }
 
     private fun createNotification(text: String, count: Int, queueSize: Int): Notification {
@@ -176,7 +177,7 @@ class ScreenCaptureService : Service() {
         } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("♟️ Chess Detector")
+            .setContentTitle("â™Ÿï¸ Chess Detector")
             .setContentText(displayText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -191,17 +192,17 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
-        Log.d(TAG, "🔧 Setting up media projection...")
+        Log.d(TAG, "ðŸ”§ Setting up media projection...")
         
         val mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
 
         if (mediaProjection == null) {
-            Log.e(TAG, "❌ MediaProjection is null!")
+            Log.e(TAG, "âŒ MediaProjection is null!")
             throw Exception("MediaProjection is null")
         }
-        Log.d(TAG, "✅ MediaProjection created")
+        Log.d(TAG, "âœ… MediaProjection created")
 
         imageReader = ImageReader.newInstance(
             screenWidth,
@@ -209,7 +210,7 @@ class ScreenCaptureService : Service() {
             PixelFormat.RGBA_8888,
             2
         )
-        Log.d(TAG, "✅ ImageReader created: ${screenWidth}x${screenHeight}")
+        Log.d(TAG, "âœ… ImageReader created: ${screenWidth}x${screenHeight}")
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ChessScreenCapture",
@@ -223,16 +224,15 @@ class ScreenCaptureService : Service() {
         )
         
         if (virtualDisplay == null) {
-            Log.e(TAG, "❌ VirtualDisplay is null!")
+            Log.e(TAG, "âŒ VirtualDisplay is null!")
             throw Exception("VirtualDisplay creation failed")
         }
         
-        Log.d(TAG, "✅ Media projection setup complete!")
+        Log.d(TAG, "âœ… Media projection setup complete!")
     }
-
-    private fun startImageProcessor() {
+   private fun startImageProcessor() {
         processingJob = processingScope.launch {
-            Log.d(TAG, "🔄 Image processor started")
+            Log.d(TAG, "ðŸ”„ Image processor started")
             while (isActive) {
                 try {
                     val frame = imageQueue.poll()
@@ -249,7 +249,7 @@ class ScreenCaptureService : Service() {
                         delay(100)
                     }
                 } catch (e: TimeoutCancellationException) {
-                    Log.e(TAG, "⏱️ Processing timeout for frame, skipping...")
+                    Log.e(TAG, "â±ï¸ Processing timeout for frame, skipping...")
                     consecutiveErrors++
                     isProcessing.set(false)
                     
@@ -257,7 +257,7 @@ class ScreenCaptureService : Service() {
                         clearCacheAndRetry()
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Error in image processor", e)
+                    Log.e(TAG, "âŒ Error in image processor", e)
                     consecutiveErrors++
                     isProcessing.set(false)
                     
@@ -266,12 +266,9 @@ class ScreenCaptureService : Service() {
                     }
                 }
             }
-            Log.d(TAG, "🛑 Image processor stopped")
+            Log.d(TAG, "ðŸ›‘ Image processor stopped")
         }
     }
-
-    // PART 2 of 2 - Continue from Part 1
-// Add these methods to the ScreenCaptureService class
 
     private fun startContinuousCapture() {
         isCapturing = true
@@ -279,6 +276,7 @@ class ScreenCaptureService : Service() {
         previousBoardState = null
         cachedBoardCorners = null
         cachedOrientation = null
+        cachedUciCoordinates = null
         consecutiveErrors = 0
         gameStarted = false
         appColor = null
@@ -288,16 +286,16 @@ class ScreenCaptureService : Service() {
                 captureCount++
                 
                 val statusMessage = when {
-                    cachedBoardCorners != null && cachedOrientation != null -> "🚀 Fully optimized"
-                    cachedBoardCorners != null -> "🚀 Fast capture"
-                    else -> "📸 Initial capture"
+                    cachedBoardCorners != null && cachedOrientation != null -> "ðŸš€ Fully optimized"
+                    cachedBoardCorners != null -> "ðŸš€ Fast capture"
+                    else -> "ðŸ“¸ Initial capture"
                 }
                 Log.d(TAG, "$statusMessage #$captureCount")
                 
                 updateNotification("Monitoring...", captureCount, imageQueue.size)
                 
                 if (imageQueue.size >= MAX_QUEUE_SIZE) {
-                    Log.w(TAG, "⚠️ Queue full (${imageQueue.size}), skipping capture #$captureCount")
+                    Log.w(TAG, "âš ï¸ Queue full (${imageQueue.size}), skipping capture #$captureCount")
                     delay(CAPTURE_INTERVAL)
                     continue
                 }
@@ -311,7 +309,7 @@ class ScreenCaptureService : Service() {
             }
             
             while (imageQueue.isNotEmpty()) {
-                Log.d(TAG, "⏳ Waiting for ${imageQueue.size} frames to process...")
+                Log.d(TAG, "â³ Waiting for ${imageQueue.size} frames to process...")
                 delay(500)
             }
             
@@ -331,12 +329,12 @@ class ScreenCaptureService : Service() {
                 
                 val frame = CapturedFrame(bitmap, captureCount, System.currentTimeMillis())
                 imageQueue.offer(frame)
-                Log.d(TAG, "📥 Frame #$captureCount enqueued (Queue size: ${imageQueue.size})")
+                Log.d(TAG, "ðŸ“¥ Frame #$captureCount enqueued (Queue size: ${imageQueue.size})")
             } else {
-                Log.w(TAG, "⚠️ No image available on capture #$captureCount")
+                Log.w(TAG, "âš ï¸ No image available on capture #$captureCount")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error capturing frame #$captureCount", e)
+            Log.e(TAG, "âŒ Error capturing frame #$captureCount", e)
             consecutiveErrors++
         }
     }
@@ -356,7 +354,6 @@ class ScreenCaptureService : Service() {
         bitmap.copyPixelsFromBuffer(buffer)
         return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
-
     private suspend fun processFrameWithErrorHandling(frame: CapturedFrame) {
         try {
             val currentBoardState = if (cachedBoardCorners != null && cachedOrientation != null) {
@@ -372,9 +369,12 @@ class ScreenCaptureService : Service() {
                 if (state?.boardCorners != null && state.whiteOnBottom != null) {
                     cachedBoardCorners = state.boardCorners
                     cachedOrientation = state.whiteOnBottom
+                    cachedUciCoordinates = state.uciToScreenCoordinates
                     consecutiveErrors = 0
                     
-                    // ✅ START GAME with backend - Send bottom color
+                    Log.d(TAG, "âœ… Cached board corners, orientation AND ${cachedUciCoordinates?.size} UCI coordinates")
+                    
+                    // âœ… START GAME with backend - Send bottom color
                     if (!gameStarted && backendClient.hasBackendUrl()) {
                         val bottomColor = if (cachedOrientation == true) "white" else "black"
                         startGameWithBackend(bottomColor)
@@ -389,7 +389,7 @@ class ScreenCaptureService : Service() {
             
             if (currentBoardState != null) {
                 consecutiveErrors = 0
-                Log.d(TAG, "✅ Frame #${frame.captureNumber}: ${currentBoardState.white.size} white, ${currentBoardState.black.size} black")
+                Log.d(TAG, "âœ… Frame #${frame.captureNumber}: ${currentBoardState.white.size} white, ${currentBoardState.black.size} black")
                 
                 lastTwoStates.add(Pair(currentBoardState, frame.timestamp))
                 
@@ -413,7 +413,7 @@ class ScreenCaptureService : Service() {
                 previousBoardState = currentBoardState
             } else {
                 consecutiveErrors++
-                Log.w(TAG, "⚠️ No board detected in frame #${frame.captureNumber} (Error count: $consecutiveErrors)")
+                Log.w(TAG, "âš ï¸ No board detected in frame #${frame.captureNumber} (Error count: $consecutiveErrors)")
                 
                 if (consecutiveErrors >= maxConsecutiveErrors) {
                     clearCacheAndRetry()
@@ -421,7 +421,7 @@ class ScreenCaptureService : Service() {
             }
         } catch (e: Exception) {
             consecutiveErrors++
-            Log.e(TAG, "❌ Error processing frame #${frame.captureNumber}", e)
+            Log.e(TAG, "âŒ Error processing frame #${frame.captureNumber}", e)
             
             if (consecutiveErrors >= maxConsecutiveErrors) {
                 clearCacheAndRetry()
@@ -429,18 +429,18 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    // ✅ Start game with backend
+    // âœ… Start game with backend
     private fun startGameWithBackend(bottomColor: String) {
         processingScope.launch {
             try {
                 appColor = bottomColor
-                Log.d(TAG, "🎮 Starting game with backend - Bottom color: $bottomColor")
+                Log.d(TAG, "ðŸŽ® Starting game with backend - Bottom color: $bottomColor")
                 
                 val result = backendClient.startGame(bottomColor)
                 
                 result.onSuccess { response ->
                     gameStarted = true
-                    Log.d(TAG, "✅ Game started! Backend response: $response")
+                    Log.d(TAG, "âœ… Game started! Backend response: $response")
                     
                     if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
                         // Backend made first move (app is white)
@@ -454,18 +454,18 @@ class ScreenCaptureService : Service() {
                         isAppTurn = false
                     }
                 }.onFailure { e ->
-                    Log.e(TAG, "❌ Failed to start game", e)
+                    Log.e(TAG, "âŒ Failed to start game", e)
                     withContext(Dispatchers.Main) {
                         showToast("Failed to start game: ${e.message}")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error starting game", e)
+                Log.e(TAG, "âŒ Error starting game", e)
             }
         }
     }
 
-    // ✅ Detect and process moves with backend
+    // âœ… Detect and process moves with backend
     private suspend fun detectAndProcessMoves(oldState: BoardState, newState: BoardState): Boolean {
         val topColor = if (cachedOrientation == true) "black" else "white"
         
@@ -487,7 +487,7 @@ class ScreenCaptureService : Service() {
             val to = topAppeared.first()
             val move = "$from$to"
             
-            Log.d(TAG, "🎯 Enemy ($topColor) moved: $move")
+            Log.d(TAG, "ðŸŽ¯ Enemy ($topColor) moved: $move")
             handler.post {
                 showToast("Enemy moved: $move")
             }
@@ -513,7 +513,7 @@ class ScreenCaptureService : Service() {
                 val to = bottomMoved.first()
                 val move = "$from$to"
                 
-                Log.d(TAG, "🎯 Enemy ($topColor) captured: $move")
+                Log.d(TAG, "ðŸŽ¯ Enemy ($topColor) captured: $move")
                 handler.post {
                     showToast("Enemy captured: $move")
                 }
@@ -528,18 +528,17 @@ class ScreenCaptureService : Service() {
         
         return false
     }
-
-    // ✅ Send move to backend
+    // âœ… Send move to backend
     private fun sendMoveToBackend(move: String) {
         processingScope.launch {
             try {
                 waitingForBackendMove = true
-                Log.d(TAG, "📤 Sending enemy move to backend: $move")
+                Log.d(TAG, "ðŸ“¤ Sending enemy move to backend: $move")
                 
                 val result = backendClient.sendMove(move)
                 
                 result.onSuccess { response ->
-                    Log.d(TAG, "✅ Backend response: $response")
+                    Log.d(TAG, "âœ… Backend response: $response")
                     
                     when (response) {
                         "Invalid" -> {
@@ -562,7 +561,7 @@ class ScreenCaptureService : Service() {
                         }
                     }
                 }.onFailure { e ->
-                    Log.e(TAG, "❌ Failed to send move", e)
+                    Log.e(TAG, "âŒ Failed to send move", e)
                     withContext(Dispatchers.Main) {
                         showToast("Backend error: ${e.message}")
                     }
@@ -570,48 +569,49 @@ class ScreenCaptureService : Service() {
                 
                 waitingForBackendMove = false
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error sending move to backend", e)
+                Log.e(TAG, "âŒ Error sending move to backend", e)
                 waitingForBackendMove = false
             }
         }
     }
 
-    // ✅ Execute backend's move via accessibility service
+    // âœ… Execute backend's move via accessibility service
     private suspend fun executeBackendMove(move: String) {
         withContext(Dispatchers.Main) {
             try {
                 val executor = AutoTapExecutor.getInstance()
                 
                 if (executor == null) {
-                    showToast("⚠️ Enable Accessibility Service to auto-execute moves")
+                    showToast("âš ï¸ Enable Accessibility Service to auto-execute moves")
                     Log.w(TAG, "Accessibility service not enabled")
                     return@withContext
                 }
                 
-                if (cachedBoardCorners == null) {
-                    Log.e(TAG, "❌ Board corners not cached, cannot execute move")
+                if (cachedUciCoordinates == null) {
+                    Log.e(TAG, "âŒ UCI coordinates not cached, cannot execute move")
                     return@withContext
                 }
                 
-                Log.d(TAG, "🎮 Executing backend move: $move")
-                val success = executor.executeMove(move, cachedBoardCorners!!)
+                Log.d(TAG, "ðŸŽ® Executing backend move: $move")
+                val success = executor.executeMove(move, cachedUciCoordinates!!)
                 
                 if (success) {
-                    showToast("✅ Executed: $move")
+                    showToast("âœ… Executed: $move")
                 } else {
-                    showToast("❌ Failed to execute: $move")
+                    showToast("âŒ Failed to execute: $move")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error executing move", e)
+                Log.e(TAG, "âŒ Error executing move", e)
                 showToast("Error executing move: ${e.message}")
             }
         }
     }
 
     private fun clearCacheAndRetry() {
-        Log.w(TAG, "🔄 Clearing cache due to errors, will retry full detection...")
+        Log.w(TAG, "ðŸ”„ Clearing cache due to errors, will retry full detection...")
         cachedBoardCorners = null
         cachedOrientation = null
+        cachedUciCoordinates = null
         lastTwoStates.clear()
         previousBoardState = null
         consecutiveErrors = 0
@@ -632,7 +632,7 @@ class ScreenCaptureService : Service() {
         isCapturing = false
         gameStarted = false
         
-        Log.d(TAG, "🛑 Service destroying, cleaning up...")
+        Log.d(TAG, "ðŸ›‘ Service destroying, cleaning up...")
         
         processingJob?.cancel()
         processingScope.cancel()
@@ -642,20 +642,21 @@ class ScreenCaptureService : Service() {
             imageQueue.poll()?.bitmap?.recycle()
             clearedCount++
         }
-        Log.d(TAG, "🗑️ Cleared $clearedCount frames from queue")
+        Log.d(TAG, "ðŸ—‘ï¸ Cleared $clearedCount frames from queue")
         
         lastTwoStates.clear()
         cachedBoardCorners = null
         cachedOrientation = null
+        cachedUciCoordinates = null
         previousBoardState = null
         
         try {
             virtualDisplay?.release()
             imageReader?.close()
             mediaProjection?.stop()
-            Log.d(TAG, "✅ Service destroyed and resources released")
+            Log.d(TAG, "âœ… Service destroyed and resources released")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error during cleanup", e)
+            Log.e(TAG, "âŒ Error during cleanup", e)
         }
     }
 
