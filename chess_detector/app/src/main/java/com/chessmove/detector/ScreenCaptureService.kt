@@ -139,7 +139,6 @@ class ScreenCaptureService : Service() {
         
         return START_NOT_STICKY
     }
-
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -356,6 +355,7 @@ class ScreenCaptureService : Service() {
         bitmap.copyPixelsFromBuffer(buffer)
         return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
+
     private suspend fun processFrameWithErrorHandling(frame: CapturedFrame) {
         try {
             val currentBoardState = if (cachedBoardCorners != null && cachedOrientation != null) {
@@ -427,42 +427,6 @@ class ScreenCaptureService : Service() {
             
             if (consecutiveErrors >= maxConsecutiveErrors) {
                 clearCacheAndRetry()
-            }
-        }
-    }
-
-    // âœ… Start game with backend
-    private fun startGameWithBackend(bottomColor: String) {
-        processingScope.launch {
-            try {
-                appColor = bottomColor
-                Log.d(TAG, "ðŸŽ® App is playing as: $bottomColor")
-                
-                val result = backendClient.startGame(bottomColor)
-                
-                result.onSuccess { response ->
-                    gameStarted = true
-                    
-                    if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
-                        // Backend made first move (app is white)
-                        Log.d(TAG, "âœ… Executed: $response")
-                        withContext(Dispatchers.Main) {
-                            showToast("Backend played: $response")
-                        }
-                        executeBackendMove(response)
-                        isAppTurn = false
-                    } else {
-                        // App is black, wait for enemy move
-                        isAppTurn = false
-                    }
-                }.onFailure { e ->
-                    Log.e(TAG, "âŒ Failed to start game", e)
-                    withContext(Dispatchers.Main) {
-                        showToast("Failed to start game: ${e.message}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "âŒ Error starting game", e)
             }
         }
     }
@@ -589,7 +553,6 @@ class ScreenCaptureService : Service() {
             }
         }
     }
-
     // âœ… Execute backend's move via accessibility service
     private suspend fun executeBackendMove(move: String) {
         withContext(Dispatchers.Main) {
