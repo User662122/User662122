@@ -47,34 +47,48 @@ private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double = 0.95): MatOf
     return MatOfPoint2f(*shrunk)
 }
 
+// ✅ FIXED: Calculate coordinates on ORIGINAL screen, not warped board
 private fun calculateUciToScreenCoordinates(
     boardCorners: Array<Point>,
-    whiteOnBottom: Boolean
+    whiteOnBottom: Boolean,
+    originalImageSize: Size  // Pass original image dimensions
 ): Map<String, android.graphics.Point> {
     val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
     
+    // Board corners are already in the coordinate system of the resized image
     val topLeft = boardCorners[0]
     val topRight = boardCorners[1]
+    val bottomRight = boardCorners[2]
     val bottomLeft = boardCorners[3]
-    
-    val boardWidth = topRight.x - topLeft.x
-    val boardHeight = bottomLeft.y - topLeft.y
-    
-    val cellWidth = boardWidth / 8.0
-    val cellHeight = boardHeight / 8.0
     
     val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
     val ranks = if (whiteOnBottom) "87654321" else "12345678"
     
+    // Calculate for each square
     for (rankIndex in 0 until 8) {
         for (fileIndex in 0 until 8) {
             val uci = "${files[fileIndex]}${ranks[rankIndex]}"
             
-            // Calculate center of square
-            val screenX = topLeft.x + (fileIndex + 0.5) * cellWidth
-            val screenY = topLeft.y + (rankIndex + 0.5) * cellHeight
+            // Calculate position as fraction of board (0.0 to 1.0)
+            val fileRatio = (fileIndex + 0.5) / 8.0
+            val rankRatio = (rankIndex + 0.5) / 8.0
+            
+            // Use bilinear interpolation to find exact position on original board
+            // Top edge point
+            val topX = topLeft.x + (topRight.x - topLeft.x) * fileRatio
+            val topY = topLeft.y + (topRight.y - topLeft.y) * fileRatio
+            
+            // Bottom edge point
+            val bottomX = bottomLeft.x + (bottomRight.x - bottomLeft.x) * fileRatio
+            val bottomY = bottomLeft.y + (bottomRight.y - bottomLeft.y) * fileRatio
+            
+            // Interpolate between top and bottom
+            val screenX = topX + (bottomX - topX) * rankRatio
+            val screenY = topY + (bottomY - topY) * rankRatio
             
             coordinatesMap[uci] = android.graphics.Point(screenX.toInt(), screenY.toInt())
+            
+            Log.d("ChessDetector", "UCI $uci -> Screen coordinates: (${screenX.toInt()}, ${screenY.toInt()})")
         }
     }
     
@@ -171,17 +185,17 @@ private fun detectPiecesOnBoard(
     val emptyNorm = normalizeSensitivity(EMPTY_DETECTION_SENSITIVITY)
     
     // MUCH MORE RELAXED THRESHOLDS
-    val posBrightDiff = max(0.5, 20 - (whiteNorm * 0.25))  // Reduced from 25
-    val minWhiteStd = max(0.5, 25 - (whiteNorm * 0.3))     // Reduced from 30
-    val whiteEdgeBoost = whiteNorm * 0.4                    // Increased from 0.3
-    val whiteBrightnessThresh = max(90.0, 190 - (whiteNorm * 0.6))  // Reduced from 200
-    val negBrightDiff = min(-0.5, -8 - (blackNorm * 0.25)) // Increased from -10
-    val blackStdThresh = max(0.5, 4 + (blackNorm * 0.08))  // Reduced from 5
-    val blackEdgeBoost = blackNorm * 0.4                    // Increased from 0.3
-    val edgeCountThresh = max(3.0, 70 - (emptyNorm * 0.7)) // Reduced from 80
-    val stdBgThresh = max(0.5, 4 + (emptyNorm * 0.12))     // Reduced from 5
-    val maxEmptyStd = max(12.0, 18 + (emptyNorm * 0.3))    // Increased from 15
-    val emptyEdgeThresh = max(0.5, 18 - (emptyNorm * 0.18)) // Reduced from 20
+    val posBrightDiff = max(0.5, 20 - (whiteNorm * 0.25))
+    val minWhiteStd = max(0.5, 25 - (whiteNorm * 0.3))
+    val whiteEdgeBoost = whiteNorm * 0.4
+    val whiteBrightnessThresh = max(90.0, 190 - (whiteNorm * 0.6))
+    val negBrightDiff = min(-0.5, -8 - (blackNorm * 0.25))
+    val blackStdThresh = max(0.5, 4 + (blackNorm * 0.08))
+    val blackEdgeBoost = blackNorm * 0.4
+    val edgeCountThresh = max(3.0, 70 - (emptyNorm * 0.7))
+    val stdBgThresh = max(0.5, 4 + (emptyNorm * 0.12))
+    val maxEmptyStd = max(12.0, 18 + (emptyNorm * 0.3))
+    val emptyEdgeThresh = max(0.5, 18 - (emptyNorm * 0.18))
     
     for (r in 0 until 8) {
         for (c in 0 until 8) {
@@ -234,7 +248,7 @@ private fun detectPiecesOnBoard(
             val innerBlur = Mat()
             Imgproc.GaussianBlur(inner, innerBlur, Size(3.0, 3.0), 0.0)
             val edges = Mat()
-            Imgproc.Canny(innerBlur, edges, 40.0, 140.0)  // Reduced from 50/150
+            Imgproc.Canny(innerBlur, edges, 40.0, 140.0)
             val edgeCount = Core.countNonZero(edges)
             
             val absBrightness = innerMean
@@ -242,45 +256,37 @@ private fun detectPiecesOnBoard(
             val diff = innerMean - localBg
             val label = "${files[c]}${ranks[r]}"
             
-            // EXTREMELY RELAXED - Subtract/Add more to detect easier
-            var curPosThresh = posBrightDiff - 5  // Increased from 3
-            var curNegThresh = negBrightDiff + 5  // Increased from 3
-            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost - 8  // Increased from 5
+            var curPosThresh = posBrightDiff - 5
+            var curNegThresh = negBrightDiff + 5
+            var curEdgeThresh = edgeCountThresh + whiteEdgeBoost + blackEdgeBoost - 8
             
             if (localBgStd > stdBgThresh) {
-                curPosThresh += 3   // Reduced from 5
-                curNegThresh -= 3   // Reduced from 5
-                curEdgeThresh += 15 + whiteEdgeBoost + blackEdgeBoost  // Reduced from 20
+                curPosThresh += 3
+                curNegThresh -= 3
+                curEdgeThresh += 15 + whiteEdgeBoost + blackEdgeBoost
             }
             
             val brightMask = Mat()
-            Core.compare(inner, Scalar(190.0), brightMask, Core.CMP_GT)  // Reduced from 200
+            Core.compare(inner, Scalar(190.0), brightMask, Core.CMP_GT)
             val brightPixels = Core.countNonZero(brightMask)
             val brightRatio = brightPixels.toDouble() / inner.total()
-            val isSmallBrightSpot = brightRatio < 0.06 && edgeCount < 18 && innerStd < 28 && absBrightness > 170  // More relaxed
+            val isSmallBrightSpot = brightRatio < 0.06 && edgeCount < 18 && innerStd < 28 && absBrightness > 170
             
             var pieceDetected = false
             var colorIsWhite = false
             
-            // PRIMARY DETECTION - With edges
             if (edgeCount >= curEdgeThresh && !isSmallBrightSpot) {
                 pieceDetected = true
                 colorIsWhite = diff > 0 || isVeryBright
-            } 
+            }
             
-            // SECONDARY DETECTION - Without edge requirement (VERY RELAXED)
             if (!pieceDetected) {
-                // White piece detection - MUCH more relaxed
                 if ((diff >= curPosThresh || isVeryBright || absBrightness > 160) && !isSmallBrightSpot) {
-                    // Accept if EITHER std is high enough OR brightness is high
                     if (innerStd >= minWhiteStd || absBrightness > 170) {
                         pieceDetected = true
                         colorIsWhite = true
                     }
-                } 
-                // Black piece detection - MUCH more relaxed
-                else if (diff <= curNegThresh || absBrightness < 120) {
-                    // Accept if std shows variation OR brightness is dark enough
+                } else if (diff <= curNegThresh || absBrightness < 120) {
                     if (innerStd >= blackStdThresh || absBrightness < 110) {
                         pieceDetected = true
                         colorIsWhite = false
@@ -288,24 +294,21 @@ private fun detectPiecesOnBoard(
                 }
             }
             
-            // TERTIARY DETECTION - Edge-based fallback (NEW)
-            if (!pieceDetected && edgeCount >= (curEdgeThresh * 0.7)) {  // 70% of edge threshold
-                if (innerStd > 3) {  // Any variation at all
+            if (!pieceDetected && edgeCount >= (curEdgeThresh * 0.7)) {
+                if (innerStd > 3) {
                     pieceDetected = true
-                    colorIsWhite = absBrightness > 130  // Simple brightness check
+                    colorIsWhite = absBrightness > 130
                 }
             }
             
-            // MUCH MORE RELAXED FILTERING - Allow more detections
-            if (pieceDetected && innerStd < 6 && edgeCount < (emptyEdgeThresh * 0.8)) {  // Reduced from 8, 80%
+            if (pieceDetected && innerStd < 6 && edgeCount < (emptyEdgeThresh * 0.8)) {
                 pieceDetected = false
             }
             
-            if (pieceDetected && colorIsWhite && brightRatio < 0.015 && innerStd < 10) {  // More relaxed
+            if (pieceDetected && colorIsWhite && brightRatio < 0.015 && innerStd < 10) {
                 pieceDetected = false
             }
             
-            // FINAL CHECK - Don't reject dark pieces too easily
             if (!pieceDetected && absBrightness < 100 && innerStd > 8) {
                 pieceDetected = true
                 colorIsWhite = false
@@ -414,12 +417,18 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
         return null
     }
     
+    // ✅ Store original size before resizing
+    val originalSize = Size(img.width().toDouble(), img.height().toDouble())
+    Log.d("ChessDetector", "Original image size: ${originalSize.width.toInt()} x ${originalSize.height.toInt()}")
+    
     val resized = Mat()
     val aspectRatio = img.width().toDouble() / img.height()
     val newWidth = 900
     val newHeight = (newWidth / aspectRatio).toInt()
     Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
     img.release()
+    
+    Log.d("ChessDetector", "Resized to: ${newWidth} x ${newHeight}")
     
     val innerPts = detectLargestSquareLike(resized)
     if (innerPts == null) {
@@ -430,6 +439,11 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     
     val pts = innerPts.toArray()
     val ordered = orderPoints(pts)
+    
+    Log.d("ChessDetector", "Board corners on resized image:")
+    ordered.forEachIndexed { index, point ->
+        Log.d("ChessDetector", "  Corner $index: (${point.x.toInt()}, ${point.y.toInt()})")
+    }
     
     val side = 800
     val srcMat = MatOfPoint2f(*ordered)
@@ -481,8 +495,8 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    // ✅ Calculate UCI to screen coordinates mapping
-    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom)
+    // ✅ Calculate UCI to screen coordinates mapping on RESIZED image (which matches screen capture)
+    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom, Size(newWidth.toDouble(), newHeight.toDouble()))
     Log.d("ChessDetector", "✅ Calculated screen coordinates for ${uciCoordinates.size} squares")
     
     return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom, uciCoordinates)
