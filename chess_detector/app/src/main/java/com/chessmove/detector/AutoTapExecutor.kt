@@ -23,7 +23,7 @@ class AutoTapExecutor : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d(TAG, "✅ Accessibility service connected")
+        Log.d(TAG, "âœ… Accessibility service connected")
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -39,23 +39,23 @@ class AutoTapExecutor : AccessibilityService() {
         super.onDestroy()
     }
     
-    suspend fun executeMove(move: String, boardCorners: Array<org.opencv.core.Point>): Boolean {
+    suspend fun executeMove(move: String, uciCoordinates: Map<String, Point>): Boolean {
         return suspendCancellableCoroutine { continuation ->
             try {
                 // Parse UCI move (e.g., "e2e4")
                 val from = move.substring(0, 2)
                 val to = move.substring(2, 4)
                 
-                val fromPoint = uciToScreenCoordinates(from, boardCorners)
-                val toPoint = uciToScreenCoordinates(to, boardCorners)
+                val fromPoint = uciCoordinates[from]
+                val toPoint = uciCoordinates[to]
                 
                 if (fromPoint == null || toPoint == null) {
-                    Log.e(TAG, "❌ Invalid coordinates for move: $move")
+                    Log.e(TAG, "âŒ Invalid coordinates for move: $move (from=$from, to=$to)")
                     continuation.resume(false)
                     return@suspendCancellableCoroutine
                 }
                 
-                Log.d(TAG, "🎯 Executing move: $move ($fromPoint -> $toPoint)")
+                Log.d(TAG, "ðŸŽ¯ Executing move: $move ($fromPoint -> $toPoint)")
                 
                 // Create gesture path for "from" square
                 val path = Path().apply {
@@ -81,12 +81,12 @@ class AutoTapExecutor : AccessibilityService() {
                             
                             dispatchGesture(gesture2, object : GestureResultCallback() {
                                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                                    Log.d(TAG, "✅ Move executed successfully")
+                                    Log.d(TAG, "âœ… Move executed successfully")
                                     continuation.resume(true)
                                 }
                                 
                                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                                    Log.e(TAG, "❌ Gesture cancelled")
+                                    Log.e(TAG, "âŒ Gesture cancelled")
                                     continuation.resume(false)
                                 }
                             }, null)
@@ -94,46 +94,15 @@ class AutoTapExecutor : AccessibilityService() {
                     }
                     
                     override fun onCancelled(gestureDescription: GestureDescription?) {
-                        Log.e(TAG, "❌ Gesture cancelled")
+                        Log.e(TAG, "âŒ Gesture cancelled")
                         continuation.resume(false)
                     }
                 }, null)
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error executing move", e)
+                Log.e(TAG, "âŒ Error executing move", e)
                 continuation.resume(false)
             }
-        }
-    }
-    
-    private fun uciToScreenCoordinates(
-        uci: String, 
-        boardCorners: Array<org.opencv.core.Point>
-    ): Point? {
-        try {
-            val file = uci[0] - 'a'  // 0-7
-            val rank = uci[1] - '1'  // 0-7
-            
-            // Assuming board is detected in landscape/proper orientation
-            // boardCorners = [topLeft, topRight, bottomRight, bottomLeft]
-            val topLeft = boardCorners[0]
-            val topRight = boardCorners[1]
-            val bottomLeft = boardCorners[3]
-            
-            val boardWidth = topRight.x - topLeft.x
-            val boardHeight = bottomLeft.y - topLeft.y
-            
-            val cellWidth = boardWidth / 8.0
-            val cellHeight = boardHeight / 8.0
-            
-            // Calculate center of square
-            val x = topLeft.x + (file + 0.5) * cellWidth
-            val y = topLeft.y + (rank + 0.5) * cellHeight
-            
-            return Point(x.toInt(), y.toInt())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error converting UCI to coordinates", e)
-            return null
         }
     }
 }
