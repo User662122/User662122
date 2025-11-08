@@ -20,7 +20,8 @@ data class BoardState(
     val black: Set<String>,
     val annotatedBoard: Bitmap? = null,
     val boardCorners: Array<Point>? = null,
-    val whiteOnBottom: Boolean? = null
+    val whiteOnBottom: Boolean? = null,
+    val uciToScreenCoordinates: Map<String, android.graphics.Point>? = null
 )
 
 private fun normalizeSensitivity(sensitivity: Int): Double {
@@ -44,6 +45,40 @@ private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double = 0.95): MatOf
     }.toTypedArray()
     
     return MatOfPoint2f(*shrunk)
+}
+
+private fun calculateUciToScreenCoordinates(
+    boardCorners: Array<Point>,
+    whiteOnBottom: Boolean
+): Map<String, android.graphics.Point> {
+    val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
+    
+    val topLeft = boardCorners[0]
+    val topRight = boardCorners[1]
+    val bottomLeft = boardCorners[3]
+    
+    val boardWidth = topRight.x - topLeft.x
+    val boardHeight = bottomLeft.y - topLeft.y
+    
+    val cellWidth = boardWidth / 8.0
+    val cellHeight = boardHeight / 8.0
+    
+    val files = if (whiteOnBottom) "abcdefgh" else "hgfedcba"
+    val ranks = if (whiteOnBottom) "87654321" else "12345678"
+    
+    for (rankIndex in 0 until 8) {
+        for (fileIndex in 0 until 8) {
+            val uci = "${files[fileIndex]}${ranks[rankIndex]}"
+            
+            // Calculate center of square
+            val screenX = topLeft.x + (fileIndex + 0.5) * cellWidth
+            val screenY = topLeft.y + (rankIndex + 0.5) * cellHeight
+            
+            coordinatesMap[uci] = android.graphics.Point(screenX.toInt(), screenY.toInt())
+        }
+    }
+    
+    return coordinatesMap
 }
 
 private fun detectLargestSquareLike(img: Mat): MatOfPoint2f? {
@@ -361,7 +396,7 @@ fun getBoardStateFromBitmapWithCachedCorners(
     grayBoard.release()
     boardWarped.release()
     
-    Log.d("ChessDetector", "âœ… Detected (fully cached): ${boardState.white.size} white, ${boardState.black.size} black pieces")
+    Log.d("ChessDetector", "✅ Detected (fully cached): ${boardState.white.size} white, ${boardState.black.size} black pieces")
     
     return boardState
 }
@@ -442,9 +477,13 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     grayBoard.release()
     boardWarped.release()
     
-    Log.d("ChessDetector", "âœ… Detected: ${boardState.white.size} white, ${boardState.black.size} black pieces")
+    Log.d("ChessDetector", "✅ Detected: ${boardState.white.size} white, ${boardState.black.size} black pieces")
     Log.d("ChessDetector", "White pieces at: ${boardState.white.sorted().joinToString(", ")}")
     Log.d("ChessDetector", "Black pieces at: ${boardState.black.sorted().joinToString(", ")}")
     
-    return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom)
+    // ✅ Calculate UCI to screen coordinates mapping
+    val uciCoordinates = calculateUciToScreenCoordinates(ordered, whiteOnBottom)
+    Log.d("ChessDetector", "✅ Calculated screen coordinates for ${uciCoordinates.size} squares")
+    
+    return BoardState(boardState.white, boardState.black, boardState.annotatedBoard, ordered, whiteOnBottom, uciCoordinates)
 }
