@@ -59,10 +59,10 @@ class ScreenCaptureService : Service() {
     private var consecutiveErrors = 0
     private val maxConsecutiveErrors = 3
     
-    // âœ… NEW: Backend integration
+    // Backend integration
     private lateinit var backendClient: BackendClient
     private var gameStarted = false
-    private var appColor: String? = null  // "white" or "black"
+    private var appColor: String? = null
     private var isAppTurn = false
     private var waitingForBackendMove = false
 
@@ -70,7 +70,7 @@ class ScreenCaptureService : Service() {
         const val NOTIFICATION_ID = 2
         const val CHANNEL_ID = "ScreenCaptureChannel"
         const val TAG = "ScreenCaptureService"
-        const val MAX_CAPTURES = 1000  // Increased for long games
+        const val MAX_CAPTURES = 1000
         const val CAPTURE_INTERVAL = 3000L
         const val MAX_QUEUE_SIZE = 5
         const val PROCESSING_TIMEOUT = 5000L
@@ -182,6 +182,7 @@ class ScreenCaptureService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_delete, "Stop", stopPendingIntent)
+            .setOngoing(true)
             .setAutoCancel(false)
             .build()
     }
@@ -230,7 +231,8 @@ class ScreenCaptureService : Service() {
         
         Log.d(TAG, "âœ… Media projection setup complete!")
     }
-   private fun startImageProcessor() {
+
+    private fun startImageProcessor() {
         processingJob = processingScope.launch {
             Log.d(TAG, "ðŸ”„ Image processor started")
             while (isActive) {
@@ -374,7 +376,7 @@ class ScreenCaptureService : Service() {
                     
                     Log.d(TAG, "âœ… Cached board corners, orientation AND ${cachedUciCoordinates?.size} UCI coordinates")
                     
-                    // âœ… START GAME with backend - Send bottom color
+                    // âœ… START GAME with backend
                     if (!gameStarted && backendClient.hasBackendUrl()) {
                         val bottomColor = if (cachedOrientation == true) "white" else "black"
                         startGameWithBackend(bottomColor)
@@ -434,18 +436,53 @@ class ScreenCaptureService : Service() {
         processingScope.launch {
             try {
                 appColor = bottomColor
-                Log.d(TAG, "ðŸŽ® Starting game with backend - Bottom color: $bottomColor")
+                Log.d(TAG, "ðŸŽ® App is playing as: $bottomColor")
                 
                 val result = backendClient.startGame(bottomColor)
                 
                 result.onSuccess { response ->
                     gameStarted = true
-                    Log.d(TAG, "âœ… Game started! Backend response: $response")
                     
                     if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
                         // Backend made first move (app is white)
+                        Log.d(TAG, "âœ… Executed: $response")
                         withContext(Dispatchers.Main) {
-                            showToast("Game started! Backend played: $response")
+                            showToast("Backend played: $response")
+                        }
+                        executeBackendMove(response)
+                        isAppTurn = false
+                    } else {
+                        // App is black, wait for enemy move
+                        isAppTurn = false
+                    }
+                }.onFailure { e ->
+                    Log.e(TAG, "âŒ Failed to start game", e)
+                    withContext(Dispatchers.Main) {
+                        showToast("Failed to start game: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "âŒ Error starting game", e)
+            }
+        }
+    }
+    // âœ… Start game with backend
+    private fun startGameWithBackend(bottomColor: String) {
+        processingScope.launch {
+            try {
+                appColor = bottomColor
+                Log.d(TAG, "ðŸŽ® App is playing as: $bottomColor")
+                
+                val result = backendClient.startGame(bottomColor)
+                
+                result.onSuccess { response ->
+                    gameStarted = true
+                    
+                    if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
+                        // Backend made first move (app is white)
+                        Log.d(TAG, "âœ… Executed: $response")
+                        withContext(Dispatchers.Main) {
+                            showToast("Backend played: $response")
                         }
                         executeBackendMove(response)
                         isAppTurn = false
@@ -465,34 +502,35 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    // âœ… Detect and process moves with backend
+    // âœ… FIXED: Detect only enemy moves, send clean UCI notation
     private suspend fun detectAndProcessMoves(oldState: BoardState, newState: BoardState): Boolean {
         val topColor = if (cachedOrientation == true) "black" else "white"
         
-        val topMoved = if (topColor == "white") {
-            oldState.white - newState.white
-        } else {
-            oldState.black - newState.black
-        }
+        // Get piece sets for top color (enemy)
+        val topOldPieces = if (topColor == "white") oldState.white else oldState.black
+        val topNewPieces = if (topColor == "white") newState.white else newState.black
         
-        val topAppeared = if (topColor == "white") {
-            newState.white - oldState.white
-        } else {
-            newState.black - oldState.black
-        }
+        // Get piece sets for bottom color (app)
+        val bottomOldPieces = if (topColor == "white") oldState.black else oldState.white
+        val bottomNewPieces = if (topColor == "white") newState.black else newState.white
         
-        // Detect enemy move (top color)
+        // Detect move: enemy piece left one square and appeared on another
+        val topMoved = topOldPieces - topNewPieces
+        val topAppeared = topNewPieces - topOldPieces
+        
+        // Normal move or capture (both are just moves in UCI notation)
         if (topMoved.size == 1 && topAppeared.size == 1) {
             val from = topMoved.first()
             val to = topAppeared.first()
             val move = "$from$to"
             
-            Log.d(TAG, "ðŸŽ¯ Enemy ($topColor) moved: $move")
+            // âœ… ONLY 3 LOGS FROM HERE
+            Log.d(TAG, "ðŸŽ¯ Enemy moved: $move")
             handler.post {
-                showToast("Enemy moved: $move")
+                showToast("Enemy: $move")
             }
             
-            // Send to backend and execute response
+            // Send to backend
             if (gameStarted) {
                 sendMoveToBackend(move)
             }
@@ -500,60 +538,37 @@ class ScreenCaptureService : Service() {
             return true
         }
         
-        // Handle captures
-        if (topMoved.size == 1 && topAppeared.size == 0) {
-            val from = topMoved.first()
-            val bottomMoved = if (topColor == "white") {
-                oldState.black - newState.black
-            } else {
-                oldState.white - newState.white
-            }
-            
-            if (bottomMoved.size == 1) {
-                val to = bottomMoved.first()
-                val move = "$from$to"
-                
-                Log.d(TAG, "ðŸŽ¯ Enemy ($topColor) captured: $move")
-                handler.post {
-                    showToast("Enemy captured: $move")
-                }
-                
-                if (gameStarted) {
-                    sendMoveToBackend(move)
-                }
-                
-                return true
-            }
-        }
-        
         return false
     }
+
     // âœ… Send move to backend
     private fun sendMoveToBackend(move: String) {
         processingScope.launch {
             try {
                 waitingForBackendMove = true
-                Log.d(TAG, "ðŸ“¤ Sending enemy move to backend: $move")
                 
                 val result = backendClient.sendMove(move)
                 
                 result.onSuccess { response ->
-                    Log.d(TAG, "âœ… Backend response: $response")
-                    
                     when (response) {
                         "Invalid" -> {
+                            // âœ… LOG 3a: Non-UCI response
+                            Log.e(TAG, "âŒ Backend response: $response")
                             withContext(Dispatchers.Main) {
                                 showToast("Backend rejected move: Invalid")
                             }
                         }
                         "Game Over" -> {
+                            // âœ… LOG 3b: Non-UCI response
+                            Log.d(TAG, "ðŸ Backend response: $response")
                             withContext(Dispatchers.Main) {
                                 showToast("Game Over!")
                             }
                             gameStarted = false
                         }
                         else -> {
-                            // Backend's move to execute
+                            // âœ… LOG 2: Backend's move executed
+                            Log.d(TAG, "âœ… Executed: $response")
                             withContext(Dispatchers.Main) {
                                 showToast("Executing: $response")
                             }
@@ -592,12 +607,9 @@ class ScreenCaptureService : Service() {
                     return@withContext
                 }
                 
-                Log.d(TAG, "ðŸŽ® Executing backend move: $move")
                 val success = executor.executeMove(move, cachedUciCoordinates!!)
                 
-                if (success) {
-                    showToast("âœ… Executed: $move")
-                } else {
+                if (!success) {
                     showToast("âŒ Failed to execute: $move")
                 }
             } catch (e: Exception) {
