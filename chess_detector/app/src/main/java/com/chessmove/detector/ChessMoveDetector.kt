@@ -13,10 +13,10 @@ import kotlin.math.min
 // ===============================
 // CONSTANTS AND CONFIGURATION
 // ===============================
-private const val BOARD_SIZE = 800
-private const val CELL_SIZE = BOARD_SIZE / 8
-private const val PIECE_THRESHOLD = 15.0
-private const val SHRINK_FACTOR = 0.962
+const val BOARD_SIZE = 800
+const val CELL_SIZE = BOARD_SIZE / 8
+const val PIECE_THRESHOLD = 15.0
+const val SHRINK_FACTOR = 0.962
 
 data class BoardState(
     val white: Set<String>,
