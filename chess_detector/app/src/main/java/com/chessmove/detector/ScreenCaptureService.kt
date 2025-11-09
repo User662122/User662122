@@ -92,11 +92,23 @@ class ScreenCaptureService : Service() {
         Log.d(TAG, "âœ… Service created. Screen: ${screenWidth}x${screenHeight}, Density: $screenDensity")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "ðŸ“± onStartCommand called")
+override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "📱 onStartCommand called")
+        
+        // Handle manual move from notification
+        if (intent?.action == "MANUAL_MOVE") {
+            val move = intent.getStringExtra("move")
+            if (!move.isNullOrBlank()) {
+                Log.d(TAG, "📨 Manual move received: $move")
+                processingScope.launch {
+                    sendMoveToBackend(move)
+                }
+                return START_STICKY
+            }
+        }
         
         if (intent?.action == "STOP_CAPTURE") {
-            Log.d(TAG, "ðŸ›‘ Stop capture requested")
+            Log.d(TAG, "🛑 Stop capture requested")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -115,29 +127,29 @@ class ScreenCaptureService : Service() {
                     
                     CoroutineScope(Dispatchers.Main).launch {
                         for (i in 10 downTo 1) {
-                            Log.d(TAG, "â° Countdown: $i seconds...")
+                            Log.d(TAG, "⏰ Countdown: $i seconds...")
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "ðŸŽ¬ Starting continuous capture!")
+                        Log.d(TAG, "🎬 Starting continuous capture!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "âŒ Error setting up media projection", e)
+                    Log.e(TAG, "❌ Error setting up media projection", e)
                     showToast("Setup failed: ${e.message}")
                     stopSelf()
                 }
             } else {
-                Log.e(TAG, "âŒ Invalid result code or data is null")
+                Log.e(TAG, "❌ Invalid result code or data is null")
                 showToast("Invalid screen capture permission")
                 stopSelf()
             }
         } else {
-            Log.e(TAG, "âŒ Intent is null")
+            Log.e(TAG, "❌ Intent is null")
             stopSelf()
         }
         
-        return START_NOT_STICKY
+        return START_STICKY
     }
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
