@@ -59,6 +59,12 @@ class NotificationReceiver : BroadcastReceiver() {
                         context.startService(serviceIntent)
                         
                         Toast.makeText(context, "Sending move: $cleanMove", Toast.LENGTH_SHORT).show()
+                        
+                        // ✅ Refresh notification to clear the input field
+                        val refreshIntent = Intent(context, ChessDetectorService::class.java).apply {
+                            action = "REFRESH_NOTIFICATION"
+                        }
+                        context.startService(refreshIntent)
                     } else {
                         Toast.makeText(context, "Move cannot be empty", Toast.LENGTH_SHORT).show()
                     }
