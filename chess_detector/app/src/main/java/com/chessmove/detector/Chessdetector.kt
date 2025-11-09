@@ -14,6 +14,8 @@ class ChessDetectorService : Service() {
         const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.chessmove.detector.ACTION_START"
         const val ACTION_SET_URL = "com.chessmove.detector.ACTION_SET_URL"
+        const val ACTION_SEND_MOVE = "com.chessmove.detector.ACTION_SEND_MOVE"
+        const val KEY_MOVE_INPUT = "key_move_input"
         
         fun startService(context: Context) {
             val intent = Intent(context, ChessDetectorService::class.java)
@@ -80,7 +82,7 @@ class ChessDetectorService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        // NEW: Set URL action
+        // Set URL action
         val setUrlIntent = Intent(this, NotificationReceiver::class.java).apply {
             action = ACTION_SET_URL
         }
@@ -90,6 +92,29 @@ class ChessDetectorService : Service() {
             setUrlIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        
+        // NEW: Send Move action with RemoteInput
+        val sendMoveIntent = Intent(this, NotificationReceiver::class.java).apply {
+            action = ACTION_SEND_MOVE
+        }
+        val sendMovePendingIntent = PendingIntent.getBroadcast(
+            this,
+            3,
+            sendMoveIntent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val remoteInput = androidx.core.app.RemoteInput.Builder(KEY_MOVE_INPUT)
+            .setLabel("Enter move (e.g., e2e4)")
+            .build()
+        
+        val sendMoveAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_send,
+            "Send Move",
+            sendMovePendingIntent
+        )
+            .addRemoteInput(remoteInput)
+            .build()
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("♟️ Chess Detector")
@@ -106,6 +131,7 @@ class ChessDetectorService : Service() {
                 "Set URL",
                 setUrlPendingIntent
             )
+            .addAction(sendMoveAction)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(false)
