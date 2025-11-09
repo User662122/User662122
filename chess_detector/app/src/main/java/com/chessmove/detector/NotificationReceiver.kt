@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import android.widget.Toast
+import androidx.core.app.RemoteInput
 
 class NotificationReceiver : BroadcastReceiver() {
     
@@ -36,6 +37,32 @@ class NotificationReceiver : BroadcastReceiver() {
                 context.startActivity(mainIntent)
                 
                 Toast.makeText(context, "Opening URL settings...", Toast.LENGTH_SHORT).show()
+            }
+            
+            ChessDetectorService.ACTION_SEND_MOVE -> {
+                Log.d(TAG, "📤 Send Move action triggered from notification")
+                
+                // Extract the move from RemoteInput
+                val remoteInput = RemoteInput.getResultsFromIntent(intent)
+                if (remoteInput != null) {
+                    val move = remoteInput.getCharSequence(ChessDetectorService.KEY_MOVE_INPUT)?.toString()
+                    
+                    if (!move.isNullOrBlank()) {
+                        val cleanMove = move.trim().lowercase()
+                        Log.d(TAG, "📨 Manual move from notification: $cleanMove")
+                        
+                        // Send move to ScreenCaptureService
+                        val serviceIntent = Intent(context, ScreenCaptureService::class.java).apply {
+                            action = "MANUAL_MOVE"
+                            putExtra("move", cleanMove)
+                        }
+                        context.startService(serviceIntent)
+                        
+                        Toast.makeText(context, "Sending move: $cleanMove", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Move cannot be empty", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         }
     }
