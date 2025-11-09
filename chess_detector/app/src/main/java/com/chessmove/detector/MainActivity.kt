@@ -337,26 +337,31 @@ class MainActivity : AppCompatActivity() {
                 
                 if (boardState != null) {
                     val resultText = buildString {
-                        appendLine("♟️ CHESS PIECE DETECTOR ♟️")
+                        appendLine("♟️ NEW CHESS DETECTOR ♟️")
                         appendLine()
-                        appendLine("Sensitivity Settings:")
-                        appendLine("  White=$WHITE_DETECTION_SENSITIVITY")
-                        appendLine("  Black=$BLACK_DETECTION_SENSITIVITY")
-                        appendLine("  Empty=$EMPTY_DETECTION_SENSITIVITY")
+                        appendLine("Detection Settings:")
+                        appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
+                        appendLine("  Shrink Factor: $SHRINK_FACTOR")
                         appendLine()
                         appendLine("--- DETECTED PIECES ---")
                         appendLine()
-                        appendLine("✅ White Pieces: ${boardState.white.size}")
+                        appendLine("✅ Light Pieces: ${boardState.white.size}")
                         appendLine("Positions: ${boardState.white.sorted()}")
                         appendLine()
-                        appendLine("✅ Black Pieces: ${boardState.black.size}")
+                        appendLine("✅ Dark Pieces: ${boardState.black.size}")
                         appendLine("Positions: ${boardState.black.sorted()}")
                         appendLine()
+                        if (boardState.ambiguous.isNotEmpty()) {
+                            appendLine("⚠️ Ambiguous Pieces: ${boardState.ambiguous.size}")
+                            appendLine("Positions: ${boardState.ambiguous.sorted()}")
+                            appendLine()
+                        }
                         appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
                         appendLine()
                         appendLine("📷 Annotated image displayed below")
-                        appendLine("   White squares = White pieces")
-                        appendLine("   Black squares = Black pieces")
+                        appendLine("   White squares = Light pieces")
+                        appendLine("   Black squares = Dark pieces")
+                        appendLine("   Gray squares = Ambiguous pieces")
                     }
                     
                     withContext(Dispatchers.Main) {
