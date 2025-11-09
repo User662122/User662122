@@ -38,6 +38,14 @@ class ChessDetectorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // ✅ Handle notification refresh request
+        if (intent?.action == "REFRESH_NOTIFICATION") {
+            val notification = createNotification()
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(NOTIFICATION_ID, notification)
+            return START_STICKY
+        }
+        
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
         return START_STICKY
