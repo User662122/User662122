@@ -20,14 +20,24 @@ class AutoTapExecutor : AccessibilityService() {
         fun isEnabled(): Boolean = instance != null
     }
     
+    private var lastTouchTime = 0L
+    private val PAUSE_DURATION = 2000L // 2 seconds pause on touch
+    
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d(TAG, "âœ… Accessibility service connected")
+        Log.d(TAG, "✅ Accessibility service connected")
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Not needed for gesture execution
+        // Detect touch events to pause screen capture
+        if (event?.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START ||
+            event?.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END ||
+            event?.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            
+            lastTouchTime = System.currentTimeMillis()
+            Log.d(TAG, "👆 Touch detected - pausing capture for ${PAUSE_DURATION}ms")
+        }
     }
     
     override fun onInterrupt() {
@@ -37,6 +47,11 @@ class AutoTapExecutor : AccessibilityService() {
     override fun onDestroy() {
         instance = null
         super.onDestroy()
+    }
+    
+    fun shouldPauseCapture(): Boolean {
+        val timeSinceTouch = System.currentTimeMillis() - lastTouchTime
+        return timeSinceTouch < PAUSE_DURATION
     }
     
     suspend fun executeMove(move: String, uciCoordinates: Map<String, Point>): Boolean {
@@ -50,12 +65,12 @@ class AutoTapExecutor : AccessibilityService() {
                 val toPoint = uciCoordinates[to]
                 
                 if (fromPoint == null || toPoint == null) {
-                    Log.e(TAG, "âŒ Invalid coordinates for move: $move (from=$from, to=$to)")
+                    Log.e(TAG, "❌ Invalid coordinates for move: $move (from=$from, to=$to)")
                     continuation.resume(false)
                     return@suspendCancellableCoroutine
                 }
                 
-                Log.d(TAG, "ðŸŽ¯ Executing move: $move ($fromPoint -> $toPoint)")
+                Log.d(TAG, "🎯 Executing move: $move ($fromPoint -> $toPoint)")
                 
                 // Create gesture path for "from" square
                 val path = Path().apply {
@@ -81,12 +96,12 @@ class AutoTapExecutor : AccessibilityService() {
                             
                             dispatchGesture(gesture2, object : GestureResultCallback() {
                                 override fun onCompleted(gestureDescription: GestureDescription?) {
-                                    Log.d(TAG, "âœ… Move executed successfully")
+                                    Log.d(TAG, "✅ Move executed successfully")
                                     continuation.resume(true)
                                 }
                                 
                                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                                    Log.e(TAG, "âŒ Gesture cancelled")
+                                    Log.e(TAG, "❌ Gesture cancelled")
                                     continuation.resume(false)
                                 }
                             }, null)
@@ -94,13 +109,13 @@ class AutoTapExecutor : AccessibilityService() {
                     }
                     
                     override fun onCancelled(gestureDescription: GestureDescription?) {
-                        Log.e(TAG, "âŒ Gesture cancelled")
+                        Log.e(TAG, "❌ Gesture cancelled")
                         continuation.resume(false)
                     }
                 }, null)
                 
             } catch (e: Exception) {
-                Log.e(TAG, "âŒ Error executing move", e)
+                Log.e(TAG, "❌ Error executing move", e)
                 continuation.resume(false)
             }
         }
