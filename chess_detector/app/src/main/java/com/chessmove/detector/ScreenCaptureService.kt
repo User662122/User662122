@@ -316,6 +316,10 @@ class ScreenCaptureService : Service() {
      * ✅ NEW: Capture image and convert to JPEG format (like screenshot) before processing
      * Workflow: ImageReader → Image → Bitmap.copyPixelsFromBuffer() → bitmap.compress(JPEG) → decode back
      */
+/**
+     * ✅ NEW: Capture image and convert to JPEG format (like screenshot) before processing
+     * Workflow: ImageReader → Image → Bitmap.copyPixelsFromBuffer() → bitmap.compress(JPEG) → decode back
+     */
     private fun captureAndProcessWithJpegConversion() {
         var rawBitmap: Bitmap? = null
         var jpegBitmap: Bitmap? = null
@@ -345,13 +349,16 @@ class ScreenCaptureService : Service() {
                 Log.d(TAG, "🎨 Frame #$captureCount converted to JPEG format")
                 
                 // Step 3: Process the JPEG-formatted bitmap (now matches gallery image format)
+                // ✅ FIX: Store bitmap in a final variable for the coroutine
+                val bitmapToProcess = jpegBitmap
+                jpegBitmap = null  // Clear reference before coroutine
+                
                 runBlocking {
-                    processFrameAndExtractUci(jpegBitmap, captureCount)
+                    processFrameAndExtractUci(bitmapToProcess, captureCount)
                 }
                 
                 // Step 4: Cleanup
-                jpegBitmap.recycle()
-                jpegBitmap = null
+                bitmapToProcess.recycle()
                 
                 Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
                 
@@ -368,6 +375,7 @@ class ScreenCaptureService : Service() {
             isProcessing.set(false)
         }
     }
+    
 
     /**
      * ✅ NEW: Convert raw RGBA bitmap to JPEG format and back
