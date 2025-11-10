@@ -298,6 +298,50 @@ private fun classifyPieceColors(
 }
 
 /**
+ * Detect board orientation by counting light/dark pieces in top vs bottom half
+ */
+private fun detectBoardOrientation(
+    piecesFound: List<Pair<Int, Int>>,
+    pieceTypes: Map<Pair<Int, Int>, String>
+): Boolean {
+    // Count light and dark pieces in top 4 rows (rows 0-3)
+    var lightInTop = 0
+    var darkInTop = 0
+    
+    // Count light and dark pieces in bottom 4 rows (rows 4-7)
+    var lightInBottom = 0
+    var darkInBottom = 0
+    
+    for ((row, col) in piecesFound) {
+        val pieceType = pieceTypes[Pair(row, col)] ?: continue
+        
+        if (pieceType == "ambiguous") continue // Skip ambiguous pieces
+        
+        if (row < 4) {
+            // Top 4 rows
+            if (pieceType == "light") lightInTop++
+            else if (pieceType == "dark") darkInTop++
+        } else {
+            // Bottom 4 rows
+            if (pieceType == "light") lightInBottom++
+            else if (pieceType == "dark") darkInBottom++
+        }
+    }
+    
+    Log.d("ChessDetector", "Orientation detection:")
+    Log.d("ChessDetector", "  Top 4 rows: $lightInTop light, $darkInTop dark")
+    Log.d("ChessDetector", "  Bottom 4 rows: $lightInBottom light, $darkInBottom dark")
+    
+    // If more light pieces in bottom, then white is on bottom
+    // If more light pieces in top, then white is on top (black on bottom)
+    val whiteOnBottom = lightInBottom > lightInTop
+    
+    Log.d("ChessDetector", "  Decision: ${if (whiteOnBottom) "White on bottom" else "Black on bottom"}")
+    
+    return whiteOnBottom
+}
+
+/**
  * Apply UCI mapping to piece classification results
  */
 private fun applyUciMapping(
@@ -402,33 +446,17 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String): BoardState? {
     val boardWarped = createWarpedBoard(resized, innerPts)
     resized.release()
     
-    // Detect board orientation
-    val cellSize = BOARD_SIZE / 8
-    val topLeftSquare = boardWarped.submat(0, cellSize, 0, cellSize)
-    val bottomRightSquare = boardWarped.submat(7 * cellSize, 8 * cellSize, 7 * cellSize, 8 * cellSize)
-    
-    val topLeftGray = Mat()
-    val bottomRightGray = Mat()
-    Imgproc.cvtColor(topLeftSquare, topLeftGray, Imgproc.COLOR_BGR2GRAY)
-    Imgproc.cvtColor(bottomRightSquare, bottomRightGray, Imgproc.COLOR_BGR2GRAY)
-    
-    val meanTop = Core.mean(topLeftGray).`val`[0]
-    val meanBottom = Core.mean(bottomRightGray).`val`[0]
-    val whiteOnBottom = meanBottom > meanTop
-    
-    topLeftSquare.release()
-    bottomRightSquare.release()
-    topLeftGray.release()
-    bottomRightGray.release()
-    
-    Log.d("ChessDetector", "Board orientation: whiteOnBottom=$whiteOnBottom")
-    
     // Detect pieces
     val (piecesFound, processedImg) = detectPieces(boardWarped)
     Log.d("ChessDetector", "Found ${piecesFound.size} potential pieces")
     
     // Classify piece colors
     val (pieceTypes, cleanedImg) = classifyPieceColors(boardWarped, piecesFound)
+    
+    // Detect board orientation by counting pieces in top 4 rows vs bottom 4 rows
+    val whiteOnBottom = detectBoardOrientation(piecesFound, pieceTypes)
+    
+    Log.d("ChessDetector", "Board orientation: whiteOnBottom=$whiteOnBottom")
     
     // Apply UCI mapping
     val uciResults = applyUciMapping(pieceTypes, whiteOnBottom)
