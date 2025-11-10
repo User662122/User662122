@@ -80,7 +80,7 @@ class ScreenCaptureService : Service() {
         const val PROCESSING_TIMEOUT = 5000L
         
         // ✅ JPEG compression settings to match screenshot format
-        const val JPEG_QUALITY = 91  // Match Android screenshot quality
+        const val JPEG_QUALITY = 100  // Match Android screenshot quality
     }
 
     override fun onCreate() {
