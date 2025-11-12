@@ -333,22 +333,25 @@ class MainActivity : AppCompatActivity() {
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val boardState = getBoardStateFromBitmap(img, "Chess Board")
+                // ✅ UPDATED: Added context parameter
+                val boardState = getBoardStateFromBitmap(img, "Chess Board", this@MainActivity)
                 
                 if (boardState != null) {
                     val resultText = buildString {
-                        appendLine("♟️ NEW CHESS DETECTOR ♟️")
+                        appendLine("♟️ HYBRID CHESS DETECTOR ♟️")
+                        appendLine("(OpenCV + TensorFlow Lite)")
                         appendLine()
                         appendLine("Detection Settings:")
                         appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
                         appendLine("  Shrink Factor: $SHRINK_FACTOR")
+                        appendLine("  Batch Size: 16 squares")
                         appendLine()
                         appendLine("--- DETECTED PIECES ---")
                         appendLine()
-                        appendLine("✅ Light Pieces: ${boardState.white.size}")
+                        appendLine("✅ White Pieces: ${boardState.white.size}")
                         appendLine("Positions: ${boardState.white.sorted()}")
                         appendLine()
-                        appendLine("✅ Dark Pieces: ${boardState.black.size}")
+                        appendLine("✅ Black Pieces: ${boardState.black.size}")
                         appendLine("Positions: ${boardState.black.sorted()}")
                         appendLine()
                         if (boardState.ambiguous.isNotEmpty()) {
@@ -359,8 +362,8 @@ class MainActivity : AppCompatActivity() {
                         appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
                         appendLine()
                         appendLine("📷 Annotated image displayed below")
-                        appendLine("   White squares = Light pieces")
-                        appendLine("   Black squares = Dark pieces")
+                        appendLine("   White squares = White pieces")
+                        appendLine("   Black squares = Black pieces")
                         appendLine("   Gray squares = Ambiguous pieces")
                     }
                     
