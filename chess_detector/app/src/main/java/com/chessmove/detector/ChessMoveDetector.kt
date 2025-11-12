@@ -3,7 +3,6 @@ package com.chessmove.detector
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
-import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -15,7 +14,9 @@ import kotlin.math.min
 // ===============================
 const val BOARD_SIZE = 800
 const val CELL_SIZE = BOARD_SIZE / 8
-const val PIECE_THRESHOLD = 15.0
+
+// âœ… IMPROVED: Match Python code exactly
+const val PIECE_THRESHOLD = 15.0  // Fixed 15% threshold
 const val SHRINK_FACTOR = 0.962
 
 data class BoardState(
@@ -26,17 +27,15 @@ data class BoardState(
     val boardCorners: Array<Point>? = null,
     val whiteOnBottom: Boolean? = null,
     val uciToScreenCoordinates: Map<String, android.graphics.Point>? = null,
-    val detectedSquares: Set<Pair<Int, Int>>? = null // ✅ NEW: Track which squares have pieces
+    val detectedSquares: Set<Pair<Int, Int>>? = null
 )
 
-// Square data for batch processing
 data class SquareData(
     val row: Int,
     val col: Int,
     val bitmap: Bitmap
 )
 
-// ✅ NEW: Cache for previous UCI state
 private data class UciCache(
     val detectedSquares: Set<Pair<Int, Int>>,
     val pieceColors: Map<Pair<Int, Int>, String>,
@@ -90,7 +89,6 @@ private fun detectChessboard(img: Mat): MatOfPoint2f? {
         }
     }
     
-    // Fallback to largest contour
     if (bestContour == null && contours.isNotEmpty()) {
         val largest = contours.maxByOrNull { Imgproc.contourArea(it) }
         if (largest != null) {
@@ -113,40 +111,17 @@ private fun detectChessboard(img: Mat): MatOfPoint2f? {
         shrinkPolygon(bestContour, SHRINK_FACTOR)
     } else null
 }
-
-/**
- * Shrink polygon towards center
- */
-private fun shrinkPolygon(pts: MatOfPoint2f, shrinkFactor: Double): MatOfPoint2f {
-    val points = pts.toArray()
-    val center = Point(
-        points.map { it.x }.average(),
-        points.map { it.y }.average()
-    )
-    
-    val shrunk = points.map { p ->
-        val direction = Point(p.x - center.x, p.y - center.y)
-        Point(center.x + direction.x * shrinkFactor, center.y + direction.y * shrinkFactor)
-    }.toTypedArray()
-    
-    return MatOfPoint2f(*shrunk)
-}
-
-/**
- * Create warped top-down view of chessboard
- */
 private fun createWarpedBoard(img: Mat, innerPts: MatOfPoint2f): Mat {
     val pts = innerPts.toArray()
     
-    // Order points: top-left, top-right, bottom-right, bottom-left
     val sumArr = pts.map { it.x + it.y }
     val diffArr = pts.map { it.y - it.x }
     
     val ordered = arrayOf(
-        pts[sumArr.indexOf(sumArr.minOrNull()!!)],      // top-left
-        pts[diffArr.indexOf(diffArr.minOrNull()!!)],    // top-right
-        pts[sumArr.indexOf(sumArr.maxOrNull()!!)],      // bottom-right
-        pts[diffArr.indexOf(diffArr.maxOrNull()!!)]     // bottom-left
+        pts[sumArr.indexOf(sumArr.minOrNull()!!)],
+        pts[diffArr.indexOf(diffArr.minOrNull()!!)],
+        pts[sumArr.indexOf(sumArr.maxOrNull()!!)],
+        pts[diffArr.indexOf(diffArr.maxOrNull()!!)]
     )
     
     val srcMat = MatOfPoint2f(*ordered)
@@ -169,19 +144,57 @@ private fun createWarpedBoard(img: Mat, innerPts: MatOfPoint2f): Mat {
 }
 
 /**
- * Detect pieces using edge detection (OpenCV part)
+ * âœ… IMPROVED: Detect pieces using EXACT Python approach
+ * 1. Invert image (bitwise_not)
+ * 2. Convert to grayscale
+ * 3. Apply adaptive threshold (optional, for debugging)
+ * 4. Apply Canny edge detection
+ * 5. Dilate edges (3x3 kernel, 1 iteration)
+ * 6. Calculate non-zero pixels per square with 15% threshold
  */
 private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
-    val grayBoard = Mat()
-    Imgproc.cvtColor(boardWarped, grayBoard, Imgproc.COLOR_BGR2GRAY)
+    Log.d("ChessDetector", "ðŸ” Starting IMPROVED piece detection (Python method)")
     
-    val edges = Mat()
-    Imgproc.Canny(grayBoard, edges, 50.0, 150.0)
+    // STEP 1: Invert the image (bitwise NOT)
+    val inverted = Mat()
+    Core.bitwise_not(boardWarped, inverted)
+    Log.d("ChessDetector", "   âœ… Step 1: Inverted image")
     
+    // STEP 2: Convert to grayscale
+    val grayInverted = Mat()
+    Imgproc.cvtColor(inverted, grayInverted, Imgproc.COLOR_BGR2GRAY)
+    Log.d("ChessDetector", "   âœ… Step 2: Converted to grayscale")
+    
+    // STEP 3: Apply adaptive threshold (optional for visualization)
+    val adaptiveInverted = Mat()
+    Imgproc.adaptiveThreshold(
+        grayInverted,
+        adaptiveInverted,
+        255.0,
+        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+        Imgproc.THRESH_BINARY,
+        11,
+        2.0
+    )
+    Log.d("ChessDetector", "   âœ… Step 3: Applied adaptive threshold")
+    
+    // STEP 4: Apply Canny edge detection
+    val edgesInverted = Mat()
+    Imgproc.Canny(grayInverted, edgesInverted, 50.0, 150.0)
+    Log.d("ChessDetector", "   âœ… Step 4: Applied Canny edge detection")
+    
+    // STEP 5: Dilate edges (3x3 kernel, 1 iteration)
     val kernel = Mat.ones(3, 3, CvType.CV_8U)
-    Imgproc.dilate(edges, edges, kernel, Point(-1.0, -1.0), 1)
+    val dilatedInverted = Mat()
+    Imgproc.dilate(edgesInverted, dilatedInverted, kernel, Point(-1.0, -1.0), 1)
+    Log.d("ChessDetector", "   âœ… Step 5: Dilated edges (3x3, 1 iteration)")
     
+    // STEP 6: Analyze each square with 15% threshold
     val pieceSquares = mutableListOf<Pair<Int, Int>>()
+    
+    Log.d("ChessDetector", "   Board size: ${boardWarped.cols()}x${boardWarped.rows()}")
+    Log.d("ChessDetector", "   Each square: ${CELL_SIZE}x${CELL_SIZE}")
+    Log.d("ChessDetector", "   Using FIXED ${PIECE_THRESHOLD}% threshold")
     
     for (row in 0 until 8) {
         for (col in 0 until 8) {
@@ -190,24 +203,43 @@ private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
             val x1 = col * CELL_SIZE
             val x2 = (col + 1) * CELL_SIZE
             
-            val square = edges.submat(y1, y2, x1, x2)
+            // Extract square from dilated edge image
+            val square = dilatedInverted.submat(y1, y2, x1, x2)
+            
+            // Calculate non-zero pixels percentage
             val totalPixels = square.total().toDouble()
             val nonZeroPixels = Core.countNonZero(square).toDouble()
-            val percentage = (nonZeroPixels / totalPixels) * 100
+            val percentage = (nonZeroPixels / totalPixels) * 100.0
             
+            // Apply 15% threshold
             if (percentage > PIECE_THRESHOLD) {
                 pieceSquares.add(Pair(row, col))
+                Log.d("ChessDetector", "      PIECE at ($row, $col): ${"%.1f".format(percentage)}%")
+            } else {
+                Log.d("ChessDetector", "      EMPTY at ($row, $col): ${"%.1f".format(percentage)}%")
             }
             
             square.release()
         }
     }
     
-    grayBoard.release()
-    edges.release()
+    // Cleanup
+    inverted.release()
+    grayInverted.release()
+    adaptiveInverted.release()
+    edgesInverted.release()
     kernel.release()
+    dilatedInverted.release()
     
-    Log.d("ChessDetector", "✅ OpenCV detected ${pieceSquares.size} potential pieces")
+    Log.d("ChessDetector", "âœ… IMPROVED detection complete: ${pieceSquares.size} pieces found")
+    Log.d("ChessDetector", "   Expected: 32 pieces (in standard position)")
+    
+    if (pieceSquares.size > 34) {
+        Log.w("ChessDetector", "   âš ï¸ WARNING: Too many pieces detected! Likely noise.")
+    } else if (pieceSquares.size < 30) {
+        Log.w("ChessDetector", "   âš ï¸ WARNING: Too few pieces detected! Check lighting/threshold.")
+    }
+    
     return pieceSquares
 }
 
@@ -235,14 +267,14 @@ private fun extractSquareBitmaps(boardWarped: Mat, pieceSquares: List<Pair<Int, 
 }
 
 /**
- * ✅ NEW: Check if UCI positions match cached positions
+ * Check if UCI positions match cached positions
  */
 private fun shouldSkipColorClassification(
     currentSquares: Set<Pair<Int, Int>>,
     cache: UciCache?
 ): Boolean {
     if (cache == null) {
-        Log.d("ChessDetector", "🆕 No cache - first detection")
+        Log.d("ChessDetector", "ðŸ†• No cache - first detection")
         return false
     }
     
@@ -250,19 +282,16 @@ private fun shouldSkipColorClassification(
     
     if (isSame) {
         val age = System.currentTimeMillis() - cache.timestamp
-        Log.d("ChessDetector", "♻️ UCI CACHE HIT! Skipping TFLite inference (saved time, cache age: ${age}ms)")
-        Log.d("ChessDetector", "   Reusing colors for ${currentSquares.size} pieces")
+        Log.d("ChessDetector", "â™»ï¸ UCI CACHE HIT! Skipping TFLite (cache age: ${age}ms)")
     } else {
-        Log.d("ChessDetector", "🔄 UCI changed: ${cache.detectedSquares.size} → ${currentSquares.size} pieces")
-        Log.d("ChessDetector", "   Disappeared: ${cache.detectedSquares - currentSquares}")
-        Log.d("ChessDetector", "   Appeared: ${currentSquares - cache.detectedSquares}")
+        Log.d("ChessDetector", "ðŸ”„ UCI changed: ${cache.detectedSquares.size} â†’ ${currentSquares.size} pieces")
     }
     
     return isSame
 }
 
 /**
- * ✅ OPTIMIZED: Classify piece colors with caching
+ * Classify piece colors with caching
  */
 private fun classifyPieceColorsWithCache(
     squareDataList: List<SquareData>,
@@ -270,44 +299,35 @@ private fun classifyPieceColorsWithCache(
     currentSquares: Set<Pair<Int, Int>>
 ): Map<Pair<Int, Int>, String> {
     
-    // Check if we can use cached results
     if (shouldSkipColorClassification(currentSquares, lastUciCache)) {
-        // Cleanup bitmaps since we're not using them
         squareDataList.forEach { it.bitmap.recycle() }
-        
-        // Return cached colors
         return lastUciCache!!.pieceColors
     }
     
-    // UCI changed - perform classification
     val startTime = System.currentTimeMillis()
-    
     val bitmaps = squareDataList.map { it.bitmap }
     val colors = classifier.classifyBatch(bitmaps)
-    
     val elapsedTime = System.currentTimeMillis() - startTime
-    Log.d("ChessDetector", "🤖 TFLite classified ${colors.size} pieces in ${elapsedTime}ms (${elapsedTime.toFloat() / colors.size}ms/piece)")
     
-    // Map results back to (row, col) positions
+    Log.d("ChessDetector", "ðŸ¤– TFLite: ${colors.size} pieces in ${elapsedTime}ms")
+    
     val pieceTypes = mutableMapOf<Pair<Int, Int>, String>()
     for ((index, squareData) in squareDataList.withIndex()) {
         pieceTypes[Pair(squareData.row, squareData.col)] = colors[index]
         squareData.bitmap.recycle()
     }
     
-    // ✅ Update cache
     lastUciCache = UciCache(
         detectedSquares = currentSquares,
         pieceColors = pieceTypes,
         timestamp = System.currentTimeMillis()
     )
-    Log.d("ChessDetector", "💾 Cached UCI state with ${pieceTypes.size} pieces")
     
     return pieceTypes
 }
 
 /**
- * Detect board orientation by counting light/dark pieces in top vs bottom half
+ * Detect board orientation
  */
 private fun detectBoardOrientation(
     piecesFound: List<Pair<Int, Int>>,
@@ -332,19 +352,14 @@ private fun detectBoardOrientation(
         }
     }
     
-    Log.d("ChessDetector", "Orientation detection:")
-    Log.d("ChessDetector", "  Top 4 rows: $lightInTop white, $darkInTop black")
-    Log.d("ChessDetector", "  Bottom 4 rows: $lightInBottom white, $darkInBottom black")
-    
     val whiteOnBottom = lightInBottom > lightInTop
-    
-    Log.d("ChessDetector", "  Decision: ${if (whiteOnBottom) "White on bottom" else "Black on bottom"}")
+    Log.d("ChessDetector", "Orientation: ${if (whiteOnBottom) "White" else "Black"} on bottom")
     
     return whiteOnBottom
 }
 
 /**
- * Apply UCI mapping to piece classification results
+ * Apply UCI mapping
  */
 private fun applyUciMapping(
     pieceTypes: Map<Pair<Int, Int>, String>,
@@ -367,7 +382,7 @@ private fun applyUciMapping(
 }
 
 /**
- * Generate hardcoded UCI coordinates for auto-tap
+ * Generate hardcoded UCI coordinates
  */
 private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, android.graphics.Point> {
     val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
@@ -401,12 +416,9 @@ private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, andr
     return coordinatesMap
 }
 
-/**
- * ✅ NEW: Clear UCI cache (call when starting new game or resetting)
- */
 fun clearUciCache() {
     lastUciCache = null
-    Log.d("ChessDetector", "🗑️ UCI cache cleared")
+    Log.d("ChessDetector", "ðŸ—‘ï¸ UCI cache cleared")
 }
 
 // ===============================
@@ -414,10 +426,10 @@ fun clearUciCache() {
 // ===============================
 
 /**
- * Get board state from bitmap (first detection) - HYBRID APPROACH
+ * Get board state from bitmap (first detection)
  */
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context): BoardState? {
-    Log.d("ChessDetector", "🔬 Processing board (HYBRID: OpenCV + TFLite with UCI caching)...")
+    Log.d("ChessDetector", "ðŸ”¬ Processing board (IMPROVED Python method)...")
     
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
@@ -429,7 +441,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         return null
     }
     
-    // Resize image
     val resized = Mat()
     val aspectRatio = img.width().toDouble() / img.height()
     val newWidth = 900
@@ -437,9 +448,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
     img.release()
     
-    Log.d("ChessDetector", "Resized to: ${newWidth} x ${newHeight}")
-    
-    // Detect chessboard
     val innerPts = detectChessboard(resized)
     if (innerPts == null) {
         Log.e("ChessDetector", "No board found")
@@ -447,36 +455,21 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         return null
     }
     
-    val pts = innerPts.toArray()
-    Log.d("ChessDetector", "Board corners detected: ${pts.size} points")
-    
-    // Create warped board
     val boardWarped = createWarpedBoard(resized, innerPts)
     resized.release()
     
-    // STEP 1: OpenCV detects which squares have pieces
+    // âœ… IMPROVED: Use new Python-based detection
     val pieceSquares = detectPieceSquares(boardWarped)
-    Log.d("ChessDetector", "📊 OpenCV found ${pieceSquares.size} potential pieces")
-    
     val currentSquares = pieceSquares.toSet()
     
-    // STEP 2: Extract square bitmaps for TFLite
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
-    
-    // STEP 3: ✅ TFLite classifies colors with caching
     val classifier = PieceColorClassifier(context)
     val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
     classifier.close()
     
-    // Detect board orientation
     val whiteOnBottom = detectBoardOrientation(pieceSquares, pieceTypes)
-    
-    Log.d("ChessDetector", "Board orientation: whiteOnBottom=$whiteOnBottom")
-    
-    // Apply UCI mapping
     val uciResults = applyUciMapping(pieceTypes, whiteOnBottom)
     
-    // Separate by color
     val lightPieces = mutableSetOf<String>()
     val darkPieces = mutableSetOf<String>()
     val ambiguousPieces = mutableSetOf<String>()
@@ -489,9 +482,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         }
     }
     
-    Log.d("ChessDetector", "✅ Detected: ${lightPieces.size} white, ${darkPieces.size} black, ${ambiguousPieces.size} ambiguous pieces")
-    Log.d("ChessDetector", "White pieces: ${lightPieces.sorted().joinToString(", ")}")
-    Log.d("ChessDetector", "Black pieces: ${darkPieces.sorted().joinToString(", ")}")
+    Log.d("ChessDetector", "âœ… Final: ${lightPieces.size} white, ${darkPieces.size} black")
     
     // Create annotated image
     val annotated = boardWarped.clone()
@@ -517,7 +508,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     annotated.release()
     boardWarped.release()
     
-    // Generate UCI coordinates
     val uciCoordinates = getHardcodedUciCoordinates(whiteOnBottom)
     
     return BoardState(
@@ -525,7 +515,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         black = darkPieces,
         ambiguous = ambiguousPieces,
         annotatedBoard = annotatedBitmap,
-        boardCorners = pts,
+        boardCorners = innerPts.toArray(),
         whiteOnBottom = whiteOnBottom,
         uciToScreenCoordinates = uciCoordinates,
         detectedSquares = currentSquares
@@ -533,7 +523,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
 }
 
 /**
- * Get board state with cached corners (optimized for continuous capture) - HYBRID
+ * Get board state with cached corners
  */
 fun getBoardStateFromBitmapWithCachedCorners(
     bitmap: Bitmap,
@@ -542,14 +532,13 @@ fun getBoardStateFromBitmapWithCachedCorners(
     cachedWhiteOnBottom: Boolean,
     context: Context
 ): BoardState? {
-    Log.d("ChessDetector", "🚀 Processing with cached corners (HYBRID + UCI cache)...")
+    Log.d("ChessDetector", "ðŸš€ Processing with cached corners...")
     
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
     Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
     
     if (img.empty()) {
-        Log.e("ChessDetector", "Could not load image")
         img.release()
         return null
     }
@@ -561,28 +550,22 @@ fun getBoardStateFromBitmapWithCachedCorners(
     Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
     img.release()
     
-    // Create warped board using cached corners
     val innerPts = MatOfPoint2f(*cachedCorners)
     val boardWarped = createWarpedBoard(resized, innerPts)
     resized.release()
     innerPts.release()
     
-    // STEP 1: OpenCV detects pieces
+    // âœ… IMPROVED: Use new detection method
     val pieceSquares = detectPieceSquares(boardWarped)
     val currentSquares = pieceSquares.toSet()
     
-    // STEP 2: Extract square bitmaps
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
-    
-    // STEP 3: ✅ TFLite classifies colors with caching
     val classifier = PieceColorClassifier(context)
     val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
     classifier.close()
     
-    // Apply UCI mapping
     val uciResults = applyUciMapping(pieceTypes, cachedWhiteOnBottom)
     
-    // Separate by color
     val lightPieces = mutableSetOf<String>()
     val darkPieces = mutableSetOf<String>()
     val ambiguousPieces = mutableSetOf<String>()
@@ -594,8 +577,6 @@ fun getBoardStateFromBitmapWithCachedCorners(
             "ambiguous" -> ambiguousPieces.add(uciSquare)
         }
     }
-    
-    Log.d("ChessDetector", "✅ Detected (cached): ${lightPieces.size} white, ${darkPieces.size} black pieces")
     
     boardWarped.release()
     
