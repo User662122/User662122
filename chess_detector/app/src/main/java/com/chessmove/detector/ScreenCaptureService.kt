@@ -484,8 +484,8 @@ class ScreenCaptureService : Service() {
                 
                 consecutiveErrors = 0
                 
-                if (previousValidUci != null && gameStarted && !waitingForBackendMove) {
-                    detectMoveFromUciChange(previousValidUci!!, currentUci)
+                if (lastValidUci != null && gameStarted && !waitingForBackendMove) {
+    detectMoveFromUciChange(lastValidUci!!, currentUci)
                 }
                 
                 previousValidUci = lastValidUci
