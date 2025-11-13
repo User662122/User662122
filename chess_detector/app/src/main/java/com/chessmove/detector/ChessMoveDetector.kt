@@ -721,36 +721,73 @@ private fun saveAnnotatedDebugImage(
 }
 
 /**
- * ✅ NEW: Save bitmap to /storage/emulated/0/Moves/
+ * ✅ FIXED: Save bitmap to Pictures/ChessMoves/ using MediaStore (Android 10+)
  */
 private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int): Boolean {
     return try {
-        // Create Moves directory if it doesn't exist
-        val movesDir = java.io.File("/storage/emulated/0/Moves")
-        if (!movesDir.exists()) {
-            val created = movesDir.mkdirs()
-            Log.d("ChessDetector", "📁 Created Moves directory: $created")
-        }
-        
-        // Create file
         val fileName = "move$moveNumber.jpeg"
-        val file = java.io.File(movesDir, fileName)
         
-        // Save bitmap as JPEG
-        val outputStream = java.io.FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        
-        // Notify media scanner so it appears in gallery
-        val intent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-        intent.data = android.net.Uri.fromFile(file)
-        context.sendBroadcast(intent)
-        
-        Log.d("ChessDetector", "✅ Saved: ${file.absolutePath}")
-        true
+        // Use MediaStore for Android 10+ compatibility
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val contentValues = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/ChessMoves")
+                put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            
+            val resolver = context.contentResolver
+            val imageUri = resolver.insert(
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues
+            )
+            
+            if (imageUri != null) {
+                resolver.openOutputStream(imageUri)?.use { outputStream ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                }
+                
+                // Mark as not pending (makes it visible)
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(imageUri, contentValues, null, null)
+                
+                Log.d("ChessDetector", "✅ Saved to Pictures/ChessMoves/$fileName")
+                Log.d("ChessDetector", "   URI: $imageUri")
+                true
+            } else {
+                Log.e("ChessDetector", "❌ Failed to create MediaStore entry")
+                false
+            }
+        } else {
+            // Fallback for Android 9 and below
+            val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_PICTURES
+            )
+            val movesDir = java.io.File(picturesDir, "ChessMoves")
+            
+            if (!movesDir.exists()) {
+                val created = movesDir.mkdirs()
+                Log.d("ChessDetector", "📁 Created directory: $created")
+            }
+            
+            val file = java.io.File(movesDir, fileName)
+            val outputStream = java.io.FileOutputStream(file)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+            outputStream.flush()
+            outputStream.close()
+            
+            // Notify media scanner
+            val intent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+            intent.data = android.net.Uri.fromFile(file)
+            context.sendBroadcast(intent)
+            
+            Log.d("ChessDetector", "✅ Saved: ${file.absolutePath}")
+            true
+        }
     } catch (e: Exception) {
-        Log.e("ChessDetector", "❌ Error saving image", e)
+        Log.e("ChessDetector", "❌ Error saving image: ${e.message}", e)
+        e.printStackTrace()
         false
     }
 }
