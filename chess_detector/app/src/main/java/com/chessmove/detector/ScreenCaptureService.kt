@@ -70,6 +70,10 @@ class ScreenCaptureService : Service() {
     private var appColor: String? = null
     private var isAppTurn = false
     private var waitingForBackendMove = false
+    
+    // ✅ NEW: Debug image counter
+    private var debugImageCounter = 0
+    private var enableDebugImages = true  // Set to true to save images
 
     companion object {
         const val NOTIFICATION_ID = 2
@@ -78,9 +82,7 @@ class ScreenCaptureService : Service() {
         const val MAX_CAPTURES = 1000
         const val CAPTURE_INTERVAL = 1000L
         const val PROCESSING_TIMEOUT = 5000L
-        
-        // ✅ JPEG compression settings to match screenshot format
-        const val JPEG_QUALITY = 100  // Match Android screenshot quality
+        const val JPEG_QUALITY = 100
     }
 
     override fun onCreate() {
@@ -96,13 +98,24 @@ class ScreenCaptureService : Service() {
         
         createNotificationChannel()
         startImageProcessor()
-        Log.d(TAG, "✅ Service created with JPEG conversion pipeline")
+        
+        // ✅ NEW: Clear old debug images on startup
+        clearOldDebugImages()
+        
+        Log.d(TAG, "✅ Service created with debug image saving: $enableDebugImages")
         Log.d(TAG, "   Screen: ${screenWidth}x${screenHeight}, Density: $screenDensity")
-        Log.d(TAG, "   JPEG Quality: $JPEG_QUALITY (matching screenshot format)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "📱 onStartCommand called")
+        
+        // ✅ NEW: Handle debug toggle
+        if (intent?.action == "TOGGLE_DEBUG") {
+            enableDebugImages = !enableDebugImages
+            showToast("Debug images: ${if (enableDebugImages) "ON" else "OFF"}")
+            Log.d(TAG, "🔧 Debug images toggled: $enableDebugImages")
+            return START_STICKY
+        }
         
         if (intent?.action == "MANUAL_MOVE") {
             val move = intent.getStringExtra("move")
@@ -125,8 +138,6 @@ class ScreenCaptureService : Service() {
             val resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
             val data = intent.getParcelableExtra<Intent>("data")
 
-            Log.d(TAG, "ResultCode: $resultCode (RESULT_OK=-1), Data exists: ${data != null}")
-
             if (resultCode == Activity.RESULT_OK && data != null) {
                 startForeground(NOTIFICATION_ID, createNotification("Starting...", 0, 0))
                 
@@ -139,7 +150,7 @@ class ScreenCaptureService : Service() {
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "🎬 Starting continuous capture with JPEG conversion!")
+                        Log.d(TAG, "🎬 Starting continuous capture!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
@@ -158,6 +169,24 @@ class ScreenCaptureService : Service() {
         }
         
         return START_STICKY
+    }
+    
+    /**
+     * ✅ NEW: Clear old debug images from /storage/emulated/0/Moves/
+     */
+    private fun clearOldDebugImages() {
+        try {
+            val movesDir = java.io.File("/storage/emulated/0/Moves")
+            if (movesDir.exists() && movesDir.isDirectory) {
+                val files = movesDir.listFiles { file -> 
+                    file.name.startsWith("move") && file.name.endsWith(".jpeg")
+                }
+                files?.forEach { it.delete() }
+                Log.d(TAG, "🗑️ Cleared ${files?.size ?: 0} old debug images")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error clearing old debug images", e)
+        }
     }
     
     private fun createNotificationChannel() {
@@ -186,6 +215,17 @@ class ScreenCaptureService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
+        // ✅ NEW: Add debug toggle action
+        val debugIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            action = "TOGGLE_DEBUG"
+        }
+        val debugPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            debugIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
         val displayText = if (count > 0) {
             val cacheStatus = when {
                 cachedBoardCorners != null && cachedOrientation != null -> "Opt"
@@ -196,15 +236,21 @@ class ScreenCaptureService : Service() {
             val uciInfo = if (lastValidUci != null) {
                 " | W:${lastValidUci!!.whitePieces.size} B:${lastValidUci!!.blackPieces.size}"
             } else ""
-            "$text (#$count-$cacheStatus$gameStatus$uciInfo)"
+            val debugStatus = if (enableDebugImages) " | 📸" else ""
+            "$text (#$count-$cacheStatus$gameStatus$uciInfo$debugStatus)"
         } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("♟️ Chess Detector [HYBRID]")
+            .setContentTitle("♟️ Chess Detector [DEBUG]")
             .setContentText(displayText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_delete, "Stop", stopPendingIntent)
+            .addAction(
+                android.R.drawable.ic_menu_camera, 
+                if (enableDebugImages) "Debug:ON" else "Debug:OFF", 
+                debugPendingIntent
+            )
             .setOngoing(true)
             .setAutoCancel(false)
             .build()
@@ -262,6 +308,7 @@ class ScreenCaptureService : Service() {
     private fun startContinuousCapture() {
         isCapturing = true
         captureCount = 0
+        debugImageCounter = 0  // ✅ NEW: Reset counter
         lastValidUci = null
         previousValidUci = null
         cachedBoardCorners = null
@@ -298,7 +345,6 @@ class ScreenCaptureService : Service() {
                 
                 updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
                 
-                // ✅ Capture with JPEG conversion
                 captureAndProcessWithJpegConversion()
                 
                 delay(CAPTURE_INTERVAL)
@@ -312,9 +358,6 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    /**
-     * ✅ Capture image and convert to JPEG format (like screenshot) before processing
-     */
     private fun captureAndProcessWithJpegConversion() {
         var rawBitmap: Bitmap? = null
         var jpegBitmap: Bitmap? = null
@@ -322,28 +365,22 @@ class ScreenCaptureService : Service() {
         try {
             isProcessing.set(true)
             
-            // Stabilization delay
             Thread.sleep(200)
             
             val image = imageReader?.acquireLatestImage()
             
             if (image != null) {
-                // Step 1: Convert Image to raw Bitmap (RGBA_8888)
                 rawBitmap = imageToBitmap(image)
                 image.close()
                 
                 Log.d(TAG, "📥 Frame #$captureCount captured (raw RGBA)")
                 
-                // Step 2: ✅ Convert to JPEG format (simulates screenshot compression + color correction)
                 jpegBitmap = convertToJpegFormat(rawBitmap)
-                
-                // Release raw bitmap immediately
                 rawBitmap.recycle()
                 rawBitmap = null
                 
                 Log.d(TAG, "🎨 Frame #$captureCount converted to JPEG format")
                 
-                // Step 3: Process the JPEG-formatted bitmap
                 val bitmapToProcess = jpegBitmap
                 jpegBitmap = null
                 
@@ -351,9 +388,7 @@ class ScreenCaptureService : Service() {
                     processFrameAndExtractUci(bitmapToProcess, captureCount)
                 }
                 
-                // Step 4: Cleanup
                 bitmapToProcess.recycle()
-                
                 Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
                 
             } else {
@@ -370,36 +405,27 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    /**
-     * ✅ Convert raw RGBA bitmap to JPEG format and back
-     */
     private fun convertToJpegFormat(rawBitmap: Bitmap): Bitmap {
         val startTime = System.currentTimeMillis()
         
-        // Step 1: Compress to JPEG byte array
         val outputStream = ByteArrayOutputStream()
         rawBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
         val jpegBytes = outputStream.toByteArray()
         outputStream.close()
         
         val compressionTime = System.currentTimeMillis() - startTime
-        val originalSize = rawBitmap.byteCount / 1024 // KB
-        val compressedSize = jpegBytes.size / 1024 // KB
+        val originalSize = rawBitmap.byteCount / 1024
+        val compressedSize = jpegBytes.size / 1024
         val compressionRatio = originalSize.toFloat() / compressedSize.toFloat()
         
         Log.d(TAG, "   JPEG compression: ${originalSize}KB → ${compressedSize}KB (${compressionRatio}x, ${compressionTime}ms)")
         
-        // Step 2: Decode JPEG back to Bitmap
         val jpegBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-        
         Log.d(TAG, "   JPEG decoded: ${jpegBitmap.width}x${jpegBitmap.height}")
         
         return jpegBitmap
     }
 
-    /**
-     * Convert ImageReader's Image to Bitmap
-     */
     private fun imageToBitmap(image: Image): Bitmap {
         val planes = image.planes
         val buffer: ByteBuffer = planes[0].buffer
@@ -416,19 +442,18 @@ class ScreenCaptureService : Service() {
         return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
 
-    /**
-     * Process frame with JPEG-formatted bitmap (now matches gallery image quality)
-     */
     private suspend fun processFrameAndExtractUci(bitmap: Bitmap, frameNumber: Int) {
         try {
-            // ✅ UPDATED: Added context parameter
+            // ✅ UPDATED: Pass debug image parameters
             val currentBoardState = if (cachedBoardCorners != null && cachedOrientation != null) {
                 getBoardStateFromBitmapWithCachedCorners(
                     bitmap, 
                     cachedBoardCorners!!, 
                     "Frame #$frameNumber",
                     cachedOrientation!!,
-                    this@ScreenCaptureService
+                    this@ScreenCaptureService,
+                    saveDebugImage = enableDebugImages,  // ✅ NEW
+                    debugImageCounter = debugImageCounter  // ✅ NEW
                 )
             } else {
                 val state = getBoardStateFromBitmap(bitmap, "Frame #$frameNumber", this@ScreenCaptureService)
@@ -470,12 +495,10 @@ class ScreenCaptureService : Service() {
                     
                     if (pieceDifference > MAX_PIECE_DIFFERENCE) {
                         Log.w(TAG, "🚫 NOISE DETECTED! Piece difference: $pieceDifference (max: $MAX_PIECE_DIFFERENCE)")
-                        Log.w(TAG, "   Previous: ${lastValidUci!!.totalPieceCount()} pieces, Current: ${currentUci.totalPieceCount()} pieces")
-                        Log.w(TAG, "   Skipping this UCI, keeping previous valid state")
                         return
                     }
                     
-                    Log.d(TAG, "✅ Valid UCI change: $pieceDifference pieces difference (within limit)")
+                    Log.d(TAG, "✅ Valid UCI change: $pieceDifference pieces difference")
                 } else if (lastValidUci == null) {
                     Log.d(TAG, "ℹ️ First UCI capture - no noise filtering")
                 } else {
@@ -484,12 +507,18 @@ class ScreenCaptureService : Service() {
                 
                 consecutiveErrors = 0
                 
-                if (lastValidUci != null && gameStarted && !waitingForBackendMove) {
-    detectMoveFromUciChange(lastValidUci!!, currentUci)
+                if (previousValidUci != null && gameStarted && !waitingForBackendMove) {
+                    detectMoveFromUciChange(previousValidUci!!, currentUci)
                 }
                 
                 previousValidUci = lastValidUci
                 lastValidUci = currentUci
+                
+                // ✅ NEW: Increment debug counter only when pieces are successfully detected
+                if (enableDebugImages) {
+                    debugImageCounter++
+                    Log.d(TAG, "📸 Debug image #$debugImageCounter saved")
+                }
                 
                 Log.d(TAG, "💾 Stored UCI snapshot #$frameNumber: ${currentUci.totalPieceCount()} pieces")
                 
@@ -498,7 +527,7 @@ class ScreenCaptureService : Service() {
                 Log.w(TAG, "⚠️ No board detected in frame #$frameNumber (Error count: $consecutiveErrors)")
                 
                 if (consecutiveErrors >= maxConsecutiveErrors && cachedBoardCorners != null) {
-                    Log.w(TAG, "⚠️ Too many errors, but keeping game state. Will retry detection on next frame.")
+                    Log.w(TAG, "⚠️ Too many errors, but keeping game state")
                     consecutiveErrors = 0
                 }
             }
@@ -507,7 +536,7 @@ class ScreenCaptureService : Service() {
             Log.e(TAG, "❌ Error processing frame #$frameNumber", e)
             
             if (consecutiveErrors >= maxConsecutiveErrors && cachedBoardCorners != null) {
-                Log.w(TAG, "⚠️ Too many errors, but keeping game state. Will retry detection on next frame.")
+                Log.w(TAG, "⚠️ Too many errors, but keeping game state")
                 consecutiveErrors = 0
             }
         }
@@ -528,16 +557,12 @@ class ScreenCaptureService : Service() {
             val move = "$from$to"
             
             Log.d(TAG, "🎯 Enemy ($enemyColor) moved: $move")
-            Log.d(TAG, "   UCI comparison: Frame #${oldUci.captureNumber} → #${newUci.captureNumber}")
             
             handler.post {
                 showToast("Enemy: $move")
             }
             
             sendMoveToBackend(move)
-        } else if (disappeared.isNotEmpty() || appeared.isNotEmpty()) {
-            Log.d(TAG, "🤔 Complex position change: ${disappeared.size} disappeared, ${appeared.size} appeared")
-            Log.d(TAG, "   This might be a capture or castling - needs refinement")
         }
     }
 
@@ -545,7 +570,7 @@ class ScreenCaptureService : Service() {
         processingScope.launch {
             try {
                 appColor = bottomColor
-                Log.d(TAG, "🎮 App is playing as: $bottomColor (bottom of screen)")
+                Log.d(TAG, "🎮 App is playing as: $bottomColor")
                 
                 val result = backendClient.startGame(bottomColor)
                 
@@ -557,21 +582,12 @@ class ScreenCaptureService : Service() {
                             Log.d(TAG, "✅ App is white - backend gave first move: $response")
                             executeBackendMove(response)
                             isAppTurn = false
-                        } else {
-                            Log.e(TAG, "❌ App is white but backend didn't provide first move")
-                            isAppTurn = false
                         }
                     } else {
                         isAppTurn = false
-                        Log.d(TAG, "✅ App is black - waiting to detect enemy's (white) first move")
                         withContext(Dispatchers.Main) {
                             showToast("Waiting for enemy's first move...")
                         }
-                    }
-                }.onFailure { e ->
-                    Log.e(TAG, "❌ Failed to start game", e)
-                    withContext(Dispatchers.Main) {
-                        showToast("Failed to start game: ${e.message}")
                     }
                 }
             } catch (e: Exception) {
@@ -590,33 +606,25 @@ class ScreenCaptureService : Service() {
                 result.onSuccess { response ->
                     when (response) {
                         "Invalid" -> {
-                            Log.e(TAG, "❌ Backend response: $response")
                             withContext(Dispatchers.Main) {
-                                showToast("Backend rejected move: Invalid")
+                                showToast("Backend rejected move")
                             }
                         }
                         "Game Over" -> {
-                            Log.d(TAG, "🏁 Backend response: $response")
                             withContext(Dispatchers.Main) {
                                 showToast("Game Over!")
                             }
                             gameStarted = false
                         }
                         else -> {
-                            Log.d(TAG, "✅ Backend responded: $response")
                             executeBackendMove(response)
                         }
-                    }
-                }.onFailure { e ->
-                    Log.e(TAG, "❌ Failed to send move", e)
-                    withContext(Dispatchers.Main) {
-                        showToast("Backend error: ${e.message}")
                     }
                 }
                 
                 waitingForBackendMove = false
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error sending move to backend", e)
+                Log.e(TAG, "❌ Error sending move", e)
                 waitingForBackendMove = false
             }
         }
@@ -628,24 +636,18 @@ class ScreenCaptureService : Service() {
                 val executor = AutoTapExecutor.getInstance()
                 
                 if (executor == null) {
-                    showToast("⚠️ Enable Accessibility Service to auto-execute moves")
-                    Log.w(TAG, "Accessibility service not enabled")
+                    showToast("⚠️ Enable Accessibility Service")
                     return@withContext
                 }
                 
                 if (cachedUciCoordinates == null) {
-                    Log.e(TAG, "❌ UCI coordinates not cached, cannot execute move")
+                    Log.e(TAG, "❌ UCI coordinates not cached")
                     return@withContext
                 }
                 
-                val success = executor.executeMove(move, cachedUciCoordinates!!)
-                
-                if (!success) {
-                    showToast("❌ Failed to execute: $move")
-                }
+                executor.executeMove(move, cachedUciCoordinates!!)
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error executing move", e)
-                showToast("Error executing move: ${e.message}")
             }
         }
     }
@@ -661,7 +663,8 @@ class ScreenCaptureService : Service() {
         isCapturing = false
         gameStarted = false
         
-        Log.d(TAG, "🛑 Service destroying, cleaning up...")
+        Log.d(TAG, "🛑 Service destroying...")
+        Log.d(TAG, "📸 Total debug images saved: $debugImageCounter")
         
         processingJob?.cancel()
         processingScope.cancel()
@@ -672,13 +675,11 @@ class ScreenCaptureService : Service() {
         cachedOrientation = null
         cachedUciCoordinates = null
         
-        Log.d(TAG, "🗑️ Cleared all UCI snapshots and cache")
-        
         try {
             virtualDisplay?.release()
             imageReader?.close()
             mediaProjection?.stop()
-            Log.d(TAG, "✅ Service destroyed and resources released")
+            Log.d(TAG, "✅ Service destroyed")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error during cleanup", e)
         }
