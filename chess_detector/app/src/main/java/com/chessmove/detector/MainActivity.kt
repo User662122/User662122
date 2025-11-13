@@ -12,6 +12,8 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.EditText
@@ -67,6 +69,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    // ✅ NEW: Storage permission launcher
+    private val requestStoragePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            Log.d(TAG, "✅ Storage permissions granted")
+            Toast.makeText(this, "Storage permissions granted", Toast.LENGTH_SHORT).show()
+        } else {
+            Log.w(TAG, "⚠️ Some storage permissions denied")
+            // For Android 11+, might need MANAGE_EXTERNAL_STORAGE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!Environment.isExternalStorageManager()) {
+                    showManageStoragePermissionDialog()
+                }
+            }
+        }
+    }
+    
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -75,7 +96,6 @@ class MainActivity : AppCompatActivity() {
             if (data != null) {
                 Log.d(TAG, "✅ Screen capture permission granted! Starting service...")
                 
-                // Check if backend URL is set
                 if (!backendClient.hasBackendUrl()) {
                     Toast.makeText(this, "⚠️ Backend URL not set! Use 'Set URL' in notification", Toast.LENGTH_LONG).show()
                 }
@@ -123,6 +143,9 @@ class MainActivity : AppCompatActivity() {
             detectPieces()
         }
         
+        // ✅ NEW: Request storage permissions on startup
+        requestStoragePermissions()
+        
         checkNotificationPermissionAndStart()
         
         autoStartCapture = intent.getBooleanExtra("auto_start_capture", false)
@@ -132,17 +155,78 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         
-        // Show URL dialog if requested
         if (showUrlDialog) {
             showUrlDialog = false
             showSetUrlDialog()
         }
         
-        // Auto-start screen capture if requested
         if (autoStartCapture) {
             autoStartCapture = false
             Log.d(TAG, "🎬 Auto-starting screen capture from notification")
             requestScreenCapturePermission()
+        }
+    }
+    
+    /**
+     * ✅ NEW: Request storage permissions for debug images
+     */
+    private fun requestStoragePermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ - Request READ_MEDIA_IMAGES
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) 
+                != PackageManager.PERMISSION_GRANTED) {
+                requestStoragePermissionLauncher.launch(
+                    arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+                )
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11-12 - Need MANAGE_EXTERNAL_STORAGE for full access
+            if (!Environment.isExternalStorageManager()) {
+                showManageStoragePermissionDialog()
+            }
+        } else {
+            // Android 10 and below
+            val permissions = mutableListOf<String>()
+            
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+            
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            
+            if (permissions.isNotEmpty()) {
+                requestStoragePermissionLauncher.launch(permissions.toTypedArray())
+            }
+        }
+    }
+    
+    /**
+     * ✅ NEW: Show dialog for MANAGE_EXTERNAL_STORAGE permission (Android 11+)
+     */
+    private fun showManageStoragePermissionDialog() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            AlertDialog.Builder(this)
+                .setTitle("📁 Storage Permission Needed")
+                .setMessage(
+                    "To save debug images, this app needs access to storage.\n\n" +
+                    "Please enable 'Allow access to manage all files' in the next screen."
+                )
+                .setPositiveButton("Grant Permission") { _, _ ->
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                        intent.data = Uri.parse("package:$packageName")
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        startActivity(intent)
+                    }
+                }
+                .setNegativeButton("Later", null)
+                .show()
         }
     }
     
@@ -164,8 +248,6 @@ class MainActivity : AppCompatActivity() {
                         backendClient.saveBackendUrl(url)
                         Toast.makeText(this, "✅ Backend URL saved!", Toast.LENGTH_SHORT).show()
                         Log.d(TAG, "Backend URL set: $url")
-                        
-                        // Show accessibility service reminder
                         showAccessibilityReminder()
                     } else {
                         Toast.makeText(this, "❌ URL must start with http:// or https://", Toast.LENGTH_SHORT).show()
@@ -333,18 +415,16 @@ class MainActivity : AppCompatActivity() {
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // ✅ UPDATED: Added context parameter
                 val boardState = getBoardStateFromBitmap(img, "Chess Board", this@MainActivity)
                 
                 if (boardState != null) {
                     val resultText = buildString {
-                        appendLine("♟️ HYBRID CHESS DETECTOR ♟️")
-                        appendLine("(OpenCV + TensorFlow Lite)")
+                        appendLine("♟️ IMPROVED CHESS DETECTOR ♟️")
+                        appendLine("(Python-based OpenCV + TFLite)")
                         appendLine()
                         appendLine("Detection Settings:")
                         appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
-                        appendLine("  Shrink Factor: $SHRINK_FACTOR")
-                        appendLine("  Batch Size: 16 squares")
+                        appendLine("  Method: Invert→Adaptive→Canny→Dilate")
                         appendLine()
                         appendLine("--- DETECTED PIECES ---")
                         appendLine()
@@ -364,7 +444,6 @@ class MainActivity : AppCompatActivity() {
                         appendLine("📷 Annotated image displayed below")
                         appendLine("   White squares = White pieces")
                         appendLine("   Black squares = Black pieces")
-                        appendLine("   Gray squares = Ambiguous pieces")
                     }
                     
                     withContext(Dispatchers.Main) {
