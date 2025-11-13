@@ -6,6 +6,13 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     
+    <!-- ✅ NEW: Storage permissions for saving debug images -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    
     <!-- Foreground Service Permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -14,7 +21,7 @@
     <!-- Notification Permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     
-    <!-- ✅ Internet permission for backend communication -->
+    <!-- Internet permission for backend communication -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
@@ -26,6 +33,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ChessMoveDetector"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
         
         <activity
@@ -57,7 +65,7 @@
             android:foregroundServiceType="mediaProjection">
         </service>
         
-        <!-- ✅ NEW: Accessibility Service for Auto-Tap -->
+        <!-- Accessibility Service for Auto-Tap -->
         <service
             android:name=".AutoTapExecutor"
             android:enabled="true"
