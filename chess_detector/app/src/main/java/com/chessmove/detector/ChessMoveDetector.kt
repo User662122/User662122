@@ -539,14 +539,16 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
 }
 
 /**
- * Get board state with cached corners
+ * Get board state with cached corners (with optional debug image saving)
  */
 fun getBoardStateFromBitmapWithCachedCorners(
     bitmap: Bitmap,
     cachedCorners: Array<Point>,
     boardName: String,
     cachedWhiteOnBottom: Boolean,
-    context: Context
+    context: Context,
+    saveDebugImage: Boolean = false,
+    debugImageCounter: Int = 0
 ): BoardState? {
     Log.d("ChessDetector", "🚀 Processing with cached corners...")
     
@@ -594,6 +596,19 @@ fun getBoardStateFromBitmapWithCachedCorners(
         }
     }
     
+    // ✅ NEW: Create and save debug annotated image if requested
+    if (saveDebugImage) {
+        saveAnnotatedDebugImage(
+            boardWarped,
+            pieceSquares,
+            pieceTypes,
+            context,
+            debugImageCounter,
+            lightPieces.size,
+            darkPieces.size
+        )
+    }
+    
     boardWarped.release()
     
     return BoardState(
@@ -606,4 +621,136 @@ fun getBoardStateFromBitmapWithCachedCorners(
         uciToScreenCoordinates = null,
         detectedSquares = currentSquares
     )
+}
+
+/**
+ * ✅ NEW: Save annotated debug image to gallery
+ * Draws white/black/gray rectangles on detected pieces
+ * Saves to /storage/emulated/0/Moves/move{N}.jpeg
+ */
+private fun saveAnnotatedDebugImage(
+    boardWarped: Mat,
+    pieceSquares: List<Pair<Int, Int>>,
+    pieceTypes: Map<Pair<Int, Int>, String>,
+    context: Context,
+    moveNumber: Int,
+    whiteCount: Int,
+    blackCount: Int
+) {
+    try {
+        // Create annotated image
+        val annotated = boardWarped.clone()
+        
+        // Draw rectangles for each detected piece
+        for ((row, col) in pieceSquares) {
+            val x1 = col * CELL_SIZE
+            val y1 = row * CELL_SIZE
+            val x2 = x1 + CELL_SIZE
+            val y2 = y1 + CELL_SIZE
+            
+            // Color based on piece type
+            val color = when (pieceTypes[Pair(row, col)]) {
+                "white" -> Scalar(255.0, 255.0, 255.0)  // White
+                "black" -> Scalar(0.0, 0.0, 0.0)        // Black
+                else -> Scalar(128.0, 128.0, 128.0)     // Gray for ambiguous
+            }
+            
+            // Draw thick rectangle
+            Imgproc.rectangle(
+                annotated,
+                Point(x1.toDouble(), y1.toDouble()),
+                Point(x2.toDouble(), y2.toDouble()),
+                color,
+                6  // Thicker for better visibility
+            )
+            
+            // Add text label showing piece type
+            val label = when (pieceTypes[Pair(row, col)]) {
+                "white" -> "W"
+                "black" -> "B"
+                else -> "?"
+            }
+            
+            Imgproc.putText(
+                annotated,
+                label,
+                Point(x1.toDouble() + 10, y1.toDouble() + 30),
+                Imgproc.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                color,
+                3
+            )
+        }
+        
+        // Add summary text at the top
+        val summaryText = "W:$whiteCount B:$blackCount Total:${pieceSquares.size}"
+        Imgproc.putText(
+            annotated,
+            summaryText,
+            Point(10.0, 40.0),
+            Imgproc.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            Scalar(255.0, 0.0, 0.0),  // Red text
+            3
+        )
+        
+        // Convert Mat to Bitmap
+        val annotatedBitmap = Bitmap.createBitmap(
+            annotated.cols(),
+            annotated.rows(),
+            Bitmap.Config.ARGB_8888
+        )
+        Utils.matToBitmap(annotated, annotatedBitmap)
+        annotated.release()
+        
+        // Save to gallery
+        val saved = saveImageToGallery(context, annotatedBitmap, moveNumber)
+        annotatedBitmap.recycle()
+        
+        if (saved) {
+            Log.d("ChessDetector", "📸 Debug image saved: move$moveNumber.jpeg")
+            Log.d("ChessDetector", "   Location: /storage/emulated/0/Moves/move$moveNumber.jpeg")
+            Log.d("ChessDetector", "   Pieces: $whiteCount white, $blackCount black")
+        } else {
+            Log.e("ChessDetector", "❌ Failed to save debug image")
+        }
+        
+    } catch (e: Exception) {
+        Log.e("ChessDetector", "❌ Error creating debug image", e)
+    }
+}
+
+/**
+ * ✅ NEW: Save bitmap to /storage/emulated/0/Moves/
+ */
+private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int): Boolean {
+    return try {
+        // Create Moves directory if it doesn't exist
+        val movesDir = java.io.File("/storage/emulated/0/Moves")
+        if (!movesDir.exists()) {
+            val created = movesDir.mkdirs()
+            Log.d("ChessDetector", "📁 Created Moves directory: $created")
+        }
+        
+        // Create file
+        val fileName = "move$moveNumber.jpeg"
+        val file = java.io.File(movesDir, fileName)
+        
+        // Save bitmap as JPEG
+        val outputStream = java.io.FileOutputStream(file)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+        outputStream.flush()
+        outputStream.close()
+        
+        // Notify media scanner so it appears in gallery
+        val intent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+        intent.data = android.net.Uri.fromFile(file)
+        context.sendBroadcast(intent)
+        
+        Log.d("ChessDetector", "✅ Saved: ${file.absolutePath}")
+        true
+    } catch (e: Exception) {
+        Log.e("ChessDetector", "❌ Error saving image", e)
+        false
+    }
 }
