@@ -39,6 +39,11 @@ class BackendClient(private val context: Context) {
         return !getBackendUrl().isNullOrEmpty()
     }
     
+    /**
+     * Start game with backend
+     * @param color: "white" or "black" - the color the app will play as
+     * @return Response: empty string if black (waiting for opponent), or first move if white
+     */
     suspend fun startGame(color: String): Result<String> = withContext(Dispatchers.IO) {
         val url = getBackendUrl()
         if (url.isNullOrEmpty()) {
@@ -72,7 +77,17 @@ class BackendClient(private val context: Context) {
         }
     }
     
-    // ✅ NEW: Send full board position instead of moves
+    /**
+     * Send board position to backend
+     * Backend will detect opponent's move and respond with its own move
+     * @param whitePieces: Set of white piece positions (e.g., ["a2", "b2", "c2"])
+     * @param blackPieces: Set of black piece positions (e.g., ["a7", "b7", "c7"])
+     * @return Response: 
+     *   - Empty string: No move detected (board unchanged)
+     *   - "Invalid": Invalid position
+     *   - "Game Over": Game ended
+     *   - UCI move string: Backend's next move (e.g., "e2e4")
+     */
     suspend fun sendBoardPosition(whitePieces: Set<String>, blackPieces: Set<String>): Result<String> = withContext(Dispatchers.IO) {
         val url = getBackendUrl()
         if (url.isNullOrEmpty()) {
@@ -110,93 +125,6 @@ class BackendClient(private val context: Context) {
         } catch (e: IOException) {
             Log.e(TAG, "❌ Network error sending board position", e)
             Result.failure(e)
-        }
-    }
-}
-
-// ==========================================
-// ScreenCaptureService.kt - KEY CHANGES
-// ==========================================
-
-// In processFrameAndExtractUci(), replace the detectMoveFromUciChange call with:
-
-// ✅ NEW: Send board position to backend if game is active and not waiting
-if (gameStarted && !waitingForBackendMove) {
-    // Check if board state changed
-    if (lastValidUci == null || currentUci.allPieces != lastValidUci!!.allPieces) {
-        sendBoardPositionToBackend(currentUci)
-    }
-}
-
-// ✅ NEW: Add this function to ScreenCaptureService
-private suspend fun sendBoardPositionToBackend(currentUci: UciSnapshot) {
-    try {
-        waitingForBackendMove = true
-        
-        val result = backendClient.sendBoardPosition(
-            currentUci.whitePieces,
-            currentUci.blackPieces
-        )
-        
-        result.onSuccess { response ->
-            when {
-                response.isEmpty() -> {
-                    // No move detected by backend (board state unchanged)
-                    Log.d(TAG, "ℹ️ Backend: No move detected")
-                }
-                response == "Invalid" -> {
-                    withContext(Dispatchers.Main) {
-                        showToast("Backend: Invalid position")
-                    }
-                }
-                response == "Game Over" -> {
-                    withContext(Dispatchers.Main) {
-                        showToast("Game Over!")
-                    }
-                    gameStarted = false
-                }
-                else -> {
-                    // Backend detected a move and responded with its move
-                    Log.d(TAG, "🎯 Backend move: $response")
-                    executeBackendMove(response)
-                }
-            }
-        }.onFailure { e ->
-            Log.e(TAG, "❌ Error sending board position", e)
-        }
-        
-        waitingForBackendMove = false
-    } catch (e: Exception) {
-        Log.e(TAG, "❌ Error in sendBoardPositionToBackend", e)
-        waitingForBackendMove = false
-    }
-}
-
-// ✅ UPDATED: Simplified startGameWithBackend
-private fun startGameWithBackend(bottomColor: String) {
-    processingScope.launch {
-        try {
-            appColor = bottomColor
-            Log.d(TAG, "🎮 App is playing as: $bottomColor")
-            
-            val result = backendClient.startGame(bottomColor)
-            
-            result.onSuccess { response ->
-                gameStarted = true
-                
-                if (appColor == "white") {
-                    if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
-                        Log.d(TAG, "✅ App is white - backend gave first move: $response")
-                        executeBackendMove(response)
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        showToast("Waiting for opponent's first move...")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error starting game", e)
         }
     }
 }
