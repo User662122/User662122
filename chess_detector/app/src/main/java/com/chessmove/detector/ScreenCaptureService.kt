@@ -553,17 +553,12 @@ class ScreenCaptureService : Service() {
                             firstMoveCalculated = true
                         }
                     } else {
-                        // If we're black, calculate and send our first move
-                        Log.d(TAG, "🔍 Calculating app's first move...")
-                        val firstMove = calculateFirstMove(initialState)
-                        if (firstMove != null) {
-                            Log.d(TAG, "📤 Sending app's first UCI move: $firstMove")
-                            sendMoveToBackend(firstMove)
-                            firstMoveCalculated = true
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                showToast("⚠️ Could not calculate first move")
-                            }
+                        // If we're black, just wait for enemy to move first
+                        // We'll start sending positions after detecting their move
+                        Log.d(TAG, "⏳ Waiting for enemy's first move...")
+                        firstMoveCalculated = true // Set to true so we start sending positions
+                        withContext(Dispatchers.Main) {
+                            showToast("Waiting for opponent's first move...")
                         }
                     }
                 }.onFailure { e ->
