@@ -34,6 +34,10 @@ data class UciSnapshot(
     val timestamp: Long
 ) {
     fun totalPieceCount() = allPieces.size
+    
+    fun toPositionString(): String {
+        return "white:${whitePieces.sorted().joinToString(",")} black:${blackPieces.sorted().joinToString(",")}"
+    }
 }
 
 class ScreenCaptureService : Service() {
@@ -47,17 +51,14 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
     
-    // ✅ NEW: Chess board crop coordinates
     private val BOARD_CROP_X = 44
     private val BOARD_CROP_Y = 460
-    private val BOARD_CROP_WIDTH = 675 - 44  // 698 pixels
-    private val BOARD_CROP_HEIGHT = 1088 - 460 // 701 pixels
+    private val BOARD_CROP_WIDTH = 675 - 44
+    private val BOARD_CROP_HEIGHT = 1088 - 460
     
     private var lastValidUci: UciSnapshot? = null
     private var previousValidUci: UciSnapshot? = null
     
-    // ✅ REMOVED: No more board corner detection needed
-    // private var cachedBoardCorners: Array<Point>? = null
     private var cachedOrientation: Boolean? = null
     private var cachedUciCoordinates: Map<String, android.graphics.Point>? = null
     private var isCapturing = false
@@ -75,8 +76,7 @@ class ScreenCaptureService : Service() {
     private lateinit var backendClient: BackendClient
     private var gameStarted = false
     private var appColor: String? = null
-    private var isAppTurn = false
-    private var waitingForBackendMove = false
+    private var firstMoveCalculated = false // Track if we've sent initial move
     
     private var debugImageCounter = 0
     private var enableDebugImages = true
@@ -86,7 +86,7 @@ class ScreenCaptureService : Service() {
         const val CHANNEL_ID = "ScreenCaptureChannel"
         const val TAG = "ScreenCaptureService"
         const val MAX_CAPTURES = 1000
-        const val CAPTURE_INTERVAL = 1000L
+        const val CAPTURE_INTERVAL = 3000L // Changed to 3 seconds
         const val PROCESSING_TIMEOUT = 5000L
         const val JPEG_QUALITY = 100
     }
@@ -107,10 +107,9 @@ class ScreenCaptureService : Service() {
         
         clearOldDebugImages()
         
-        Log.d(TAG, "✅ Service created with PARTIAL capture mode")
-        Log.d(TAG, "   Full Screen: ${screenWidth}x${screenHeight}")
-        Log.d(TAG, "   Board Crop: ${BOARD_CROP_WIDTH}x${BOARD_CROP_HEIGHT} at ($BOARD_CROP_X,$BOARD_CROP_Y)")
-        Log.d(TAG, "   Memory savings: ~${((1 - (BOARD_CROP_WIDTH * BOARD_CROP_HEIGHT).toFloat() / (screenWidth * screenHeight))) * 100}%")
+        Log.d(TAG, "✅ Service created - UNCONDITIONAL position sending mode")
+        Log.d(TAG, "   Capture interval: ${CAPTURE_INTERVAL}ms (3 seconds)")
+        Log.d(TAG, "   Strategy: Send first UCI move, then positions every capture")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -156,7 +155,7 @@ class ScreenCaptureService : Service() {
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "🎬 Starting continuous PARTIAL capture!")
+                        Log.d(TAG, "🎬 Starting UNCONDITIONAL position capture every 3s!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
@@ -234,11 +233,12 @@ class ScreenCaptureService : Service() {
                 " | W:${lastValidUci!!.whitePieces.size} B:${lastValidUci!!.blackPieces.size}"
             } else ""
             val debugStatus = if (enableDebugImages) " | 📸" else ""
-            "$text (#$count-Crop$gameStatus$uciInfo$debugStatus)"
+            val modeStatus = if (firstMoveCalculated) " | POS" else " | UCI"
+            "$text (#$count$gameStatus$uciInfo$debugStatus$modeStatus)"
         } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("♟️ Chess Detector [PARTIAL]")
+            .setContentTitle("♟️ Chess Detector [3s]")
             .setContentText(displayText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -259,7 +259,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
-        Log.d(TAG, "🔧 Setting up media projection for PARTIAL capture...")
+        Log.d(TAG, "🔧 Setting up media projection...")
         
         val mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -271,15 +271,13 @@ class ScreenCaptureService : Service() {
         }
         Log.d(TAG, "✅ MediaProjection created")
 
-        // ✅ IMPORTANT: Still capture full screen, but we'll crop later
-        // This is because VirtualDisplay doesn't support offset capture
         imageReader = ImageReader.newInstance(
             screenWidth,
             screenHeight,
             PixelFormat.RGBA_8888,
             2
         )
-        Log.d(TAG, "✅ ImageReader created: ${screenWidth}x${screenHeight} (will crop to board)")
+        Log.d(TAG, "✅ ImageReader created: ${screenWidth}x${screenHeight}")
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ChessScreenCapture",
@@ -301,7 +299,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun startImageProcessor() {
-        Log.d(TAG, "🔄 Direct processing mode with PARTIAL crop + JPEG")
+        Log.d(TAG, "🔄 UNCONDITIONAL position mode - every capture sends to backend")
     }
 
     private fun startContinuousCapture() {
@@ -315,6 +313,7 @@ class ScreenCaptureService : Service() {
         consecutiveErrors = 0
         gameStarted = false
         appColor = null
+        firstMoveCalculated = false
         
         CoroutineScope(Dispatchers.IO).launch {
             while (isCapturing && captureCount < MAX_CAPTURES) {
@@ -334,13 +333,13 @@ class ScreenCaptureService : Service() {
                 
                 captureCount++
                 
-                Log.d(TAG, "✂️ PARTIAL capture #$captureCount (${BOARD_CROP_WIDTH}x${BOARD_CROP_HEIGHT})")
+                Log.d(TAG, "📸 Capture #$captureCount (every 3 seconds, unconditional send)")
                 
                 updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
                 
                 captureAndProcessPartialWithJpeg()
                 
-                delay(CAPTURE_INTERVAL)
+                delay(CAPTURE_INTERVAL) // 3 seconds between captures
             }
             
             if (captureCount >= MAX_CAPTURES) {
@@ -351,9 +350,6 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    /**
-     * ✅ NEW: Capture full screen, crop to board region, then convert to JPEG
-     */
     private fun captureAndProcessPartialWithJpeg() {
         var fullBitmap: Bitmap? = null
         var croppedBitmap: Bitmap? = null
@@ -367,14 +363,9 @@ class ScreenCaptureService : Service() {
             val image = imageReader?.acquireLatestImage()
             
             if (image != null) {
-                // Step 1: Get full screen bitmap
                 fullBitmap = imageToBitmap(image)
                 image.close()
                 
-                val fullSize = fullBitmap.byteCount / 1024
-                Log.d(TAG, "📥 Full screen captured: ${fullBitmap.width}x${fullBitmap.height} (${fullSize}KB)")
-                
-                // Step 2: Crop to chess board region
                 croppedBitmap = Bitmap.createBitmap(
                     fullBitmap,
                     BOARD_CROP_X,
@@ -385,18 +376,10 @@ class ScreenCaptureService : Service() {
                 fullBitmap.recycle()
                 fullBitmap = null
                 
-                val croppedSize = croppedBitmap.byteCount / 1024
-                val savings = ((1 - croppedSize.toFloat() / fullSize) * 100).toInt()
-                Log.d(TAG, "✂️ Cropped to board: ${croppedBitmap.width}x${croppedBitmap.height} (${croppedSize}KB, ${savings}% saved)")
-                
-                // Step 3: Convert to JPEG format
                 jpegBitmap = convertToJpegFormat(croppedBitmap)
                 croppedBitmap.recycle()
                 croppedBitmap = null
                 
-                Log.d(TAG, "🎨 Converted to JPEG format")
-                
-                // Step 4: Process the board
                 val bitmapToProcess = jpegBitmap
                 jpegBitmap = null
                 
@@ -423,19 +406,10 @@ class ScreenCaptureService : Service() {
     }
 
     private fun convertToJpegFormat(rawBitmap: Bitmap): Bitmap {
-        val startTime = System.currentTimeMillis()
-        
         val outputStream = ByteArrayOutputStream()
         rawBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
         val jpegBytes = outputStream.toByteArray()
         outputStream.close()
-        
-        val compressionTime = System.currentTimeMillis() - startTime
-        val originalSize = rawBitmap.byteCount / 1024
-        val compressedSize = jpegBytes.size / 1024
-        val compressionRatio = originalSize.toFloat() / compressedSize.toFloat()
-        
-        Log.d(TAG, "   JPEG: ${originalSize}KB → ${compressedSize}KB (${compressionRatio}x, ${compressionTime}ms)")
         
         val jpegBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
         return jpegBitmap
@@ -457,15 +431,9 @@ class ScreenCaptureService : Service() {
         return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
 
-    /**
-     * ✅ NEW: Process pre-cropped board image (no board detection needed!)
-     */
     private suspend fun processPartialFrameAndExtractUci(boardBitmap: Bitmap, frameNumber: Int) {
         try {
-            // ✅ SIMPLIFIED: Board is already cropped, just detect pieces
-            // No corner detection needed since we captured exact board region
-            
-            // First time: detect orientation and setup coordinates
+            // First time: detect orientation and start game
             if (cachedOrientation == null) {
                 Log.d(TAG, "🔍 First capture - detecting orientation...")
                 val initialState = getBoardStateFromBitmap(
@@ -479,11 +447,10 @@ class ScreenCaptureService : Service() {
                     cachedUciCoordinates = initialState.uciToScreenCoordinates
                     
                     Log.d(TAG, "✅ Orientation: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
-                    Log.d(TAG, "✅ UCI coordinates cached: ${cachedUciCoordinates?.size} squares")
                     
                     if (!gameStarted && backendClient.hasBackendUrl()) {
                         val bottomColor = if (cachedOrientation == true) "white" else "black"
-                        startGameWithBackend(bottomColor)
+                        startGameWithBackend(bottomColor, initialState)
                     }
                     
                     withContext(Dispatchers.Main) {
@@ -491,7 +458,6 @@ class ScreenCaptureService : Service() {
                     }
                 }
                 
-                // Process first UCI
                 if (initialState != null) {
                     val allPieces = initialState.white + initialState.black
                     lastValidUci = UciSnapshot(
@@ -510,7 +476,7 @@ class ScreenCaptureService : Service() {
                 return
             }
             
-            // ✅ Subsequent captures: Use fast detection without corner detection
+            // Subsequent captures: detect and ALWAYS send positions to backend
             val currentBoardState = getBoardStateFromBitmapDirectly(
                 boardBitmap,
                 "Frame #$frameNumber",
@@ -532,21 +498,22 @@ class ScreenCaptureService : Service() {
                 
                 Log.d(TAG, "📊 Frame #$frameNumber: ${currentUci.totalPieceCount()} pieces (W:${currentUci.whitePieces.size}, B:${currentUci.blackPieces.size})")
                 
-                // Noise filtering
+                // Basic noise filtering
                 if (lastValidUci != null && gameStarted) {
                     val pieceDifference = kotlin.math.abs(currentUci.totalPieceCount() - lastValidUci!!.totalPieceCount())
                     
                     if (pieceDifference > MAX_PIECE_DIFFERENCE) {
-                        Log.w(TAG, "🚫 NOISE! Difference: $pieceDifference")
+                        Log.w(TAG, "🚫 NOISE! Difference: $pieceDifference - skipping")
                         return
                     }
                 }
                 
                 consecutiveErrors = 0
                 
-                // Detect moves
-                if (previousValidUci != null && gameStarted && !waitingForBackendMove) {
-                    detectMoveFromUciChange(previousValidUci!!, currentUci)
+                // ✅ UNCONDITIONALLY send positions to backend every capture
+                if (gameStarted && firstMoveCalculated) {
+                    Log.d(TAG, "📤 Sending positions unconditionally...")
+                    sendPositionsToBackend(currentUci)
                 }
                 
                 previousValidUci = lastValidUci
@@ -567,31 +534,7 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private suspend fun detectMoveFromUciChange(oldUci: UciSnapshot, newUci: UciSnapshot) {
-        val enemyColor = if (appColor == "white") "black" else "white"
-        
-        val enemyOldPositions = if (enemyColor == "white") oldUci.whitePieces else oldUci.blackPieces
-        val enemyNewPositions = if (enemyColor == "white") newUci.whitePieces else newUci.blackPieces
-        
-        val disappeared = enemyOldPositions - enemyNewPositions
-        val appeared = enemyNewPositions - enemyOldPositions
-        
-        if (disappeared.size == 1 && appeared.size == 1) {
-            val from = disappeared.first()
-            val to = appeared.first()
-            val move = "$from$to"
-            
-            Log.d(TAG, "🎯 Enemy ($enemyColor) moved: $move")
-            
-            handler.post {
-                showToast("Enemy: $move")
-            }
-            
-            sendMoveToBackend(move)
-        }
-    }
-
-    private fun startGameWithBackend(bottomColor: String) {
+    private fun startGameWithBackend(bottomColor: String, initialState: BoardState) {
         processingScope.launch {
             try {
                 appColor = bottomColor
@@ -602,17 +545,31 @@ class ScreenCaptureService : Service() {
                 result.onSuccess { response ->
                     gameStarted = true
                     
+                    // If we're white, backend returns first move
                     if (appColor == "white") {
                         if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
-                            Log.d(TAG, "✅ First move: $response")
+                            Log.d(TAG, "✅ Backend's first move: $response")
                             executeBackendMove(response)
-                            isAppTurn = false
+                            firstMoveCalculated = true
                         }
                     } else {
-                        isAppTurn = false
-                        withContext(Dispatchers.Main) {
-                            showToast("Waiting for enemy's first move...")
+                        // If we're black, calculate and send our first move
+                        Log.d(TAG, "🔍 Calculating app's first move...")
+                        val firstMove = calculateFirstMove(initialState)
+                        if (firstMove != null) {
+                            Log.d(TAG, "📤 Sending app's first UCI move: $firstMove")
+                            sendMoveToBackend(firstMove)
+                            firstMoveCalculated = true
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                showToast("⚠️ Could not calculate first move")
+                            }
                         }
+                    }
+                }.onFailure { e ->
+                    Log.e(TAG, "❌ Failed to start game: ${e.message}")
+                    withContext(Dispatchers.Main) {
+                        showToast("Failed to start game")
                     }
                 }
             } catch (e: Exception) {
@@ -621,36 +578,124 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Calculate the first move from initial board position
+     * For simplicity, we'll just detect any standard opening move
+     */
+    private fun calculateFirstMove(boardState: BoardState): String? {
+        // Standard starting position has 16 pieces per side
+        if (boardState.white.size != 16 || boardState.black.size != 16) {
+            Log.w(TAG, "⚠️ Not standard starting position")
+            return null
+        }
+        
+        // For black's first move, common openings
+        // In standard position after white's move, we'd detect what changed
+        // For now, return a standard response like e7e5 (King's Pawn)
+        
+        // Check if this is truly starting position (all pieces in initial squares)
+        val whiteStandard = setOf("a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1",
+                                   "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2")
+        val blackStandard = setOf("a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
+                                   "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7")
+        
+        if (boardState.white == whiteStandard && boardState.black == blackStandard) {
+            // Pure starting position - shouldn't happen if we're black
+            Log.w(TAG, "⚠️ Pure starting position detected")
+            return null
+        }
+        
+        // Try to detect white's move by comparing to standard
+        val whiteMoved = whiteStandard - boardState.white
+        val whiteNew = boardState.white - whiteStandard
+        
+        if (whiteMoved.size == 1 && whiteNew.size == 1) {
+            val from = whiteMoved.first()
+            val to = whiteNew.first()
+            Log.d(TAG, "🎯 Detected white's move: $from$to")
+            
+            // Respond with e7e5 as standard response to e2e4
+            if (from == "e2" && to == "e4") {
+                return "e7e5"
+            }
+            
+            // Otherwise return a standard opening move
+            return "e7e5" // King's Pawn Opening
+        }
+        
+        return null
+    }
+
+    private suspend fun sendPositionsToBackend(uciSnapshot: UciSnapshot) {
+        try {
+            val positionString = uciSnapshot.toPositionString()
+            Log.d(TAG, "📤 Sending: $positionString")
+            
+            val result = backendClient.sendMove(positionString)
+            
+            result.onSuccess { response ->
+                Log.d(TAG, "📥 Backend response: $response")
+                
+                when {
+                    response.trim().isEmpty() -> {
+                        Log.d(TAG, "✅ Backend acknowledged (no move)")
+                    }
+                    response.trim() == "Invalid" -> {
+                        Log.w(TAG, "⚠️ Backend rejected position")
+                    }
+                    response.trim() == "Game Over" -> {
+                        Log.d(TAG, "🏁 Game Over!")
+                        gameStarted = false
+                        withContext(Dispatchers.Main) {
+                            showToast("Game Over!")
+                        }
+                    }
+                    else -> {
+                        // Backend responded with a move to execute
+                        Log.d(TAG, "🎯 Executing backend move: $response")
+                        executeBackendMove(response.trim())
+                    }
+                }
+            }.onFailure { e ->
+                Log.e(TAG, "❌ Backend communication failed: ${e.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error sending positions", e)
+        }
+    }
+
     private fun sendMoveToBackend(move: String) {
         processingScope.launch {
             try {
-                waitingForBackendMove = true
+                Log.d(TAG, "📤 Sending UCI move: $move")
                 
                 val result = backendClient.sendMove(move)
                 
                 result.onSuccess { response ->
-                    when (response) {
-                        "Invalid" -> {
+                    Log.d(TAG, "📥 Backend response: $response")
+                    
+                    when {
+                        response.trim().isEmpty() -> {
+                            Log.d(TAG, "✅ Move acknowledged")
+                        }
+                        response.trim() == "Invalid" -> {
                             withContext(Dispatchers.Main) {
                                 showToast("Backend rejected move")
                             }
                         }
-                        "Game Over" -> {
+                        response.trim() == "Game Over" -> {
                             withContext(Dispatchers.Main) {
                                 showToast("Game Over!")
                             }
                             gameStarted = false
                         }
                         else -> {
-                            executeBackendMove(response)
+                            executeBackendMove(response.trim())
                         }
                     }
                 }
-                
-                waitingForBackendMove = false
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error sending move", e)
-                waitingForBackendMove = false
             }
         }
     }
@@ -670,7 +715,12 @@ class ScreenCaptureService : Service() {
                     return@withContext
                 }
                 
-                executor.executeMove(move, cachedUciCoordinates!!)
+                val success = executor.executeMove(move, cachedUciCoordinates!!)
+                if (success) {
+                    Log.d(TAG, "✅ Move executed: $move")
+                } else {
+                    Log.e(TAG, "❌ Failed to execute move: $move")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error executing move", e)
             }
