@@ -49,9 +49,9 @@ class ScreenCaptureService : Service() {
     
     // ✅ NEW: Chess board crop coordinates
     private val BOARD_CROP_X = 44
-    private val BOARD_CROP_Y = 459
+    private val BOARD_CROP_Y = 460
     private val BOARD_CROP_WIDTH = 675 - 44  // 698 pixels
-    private val BOARD_CROP_HEIGHT = 1090 - 459 // 701 pixels
+    private val BOARD_CROP_HEIGHT = 1088 - 460 // 701 pixels
     
     private var lastValidUci: UciSnapshot? = null
     private var previousValidUci: UciSnapshot? = null
