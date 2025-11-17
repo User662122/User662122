@@ -47,10 +47,17 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
     
+    // ✅ NEW: Chess board crop coordinates
+    private val BOARD_CROP_X = 12
+    private val BOARD_CROP_Y = 502
+    private val BOARD_CROP_WIDTH = 710 - 12  // 698 pixels
+    private val BOARD_CROP_HEIGHT = 1203 - 502  // 701 pixels
+    
     private var lastValidUci: UciSnapshot? = null
     private var previousValidUci: UciSnapshot? = null
     
-    private var cachedBoardCorners: Array<Point>? = null
+    // ✅ REMOVED: No more board corner detection needed
+    // private var cachedBoardCorners: Array<Point>? = null
     private var cachedOrientation: Boolean? = null
     private var cachedUciCoordinates: Map<String, android.graphics.Point>? = null
     private var isCapturing = false
@@ -71,9 +78,8 @@ class ScreenCaptureService : Service() {
     private var isAppTurn = false
     private var waitingForBackendMove = false
     
-    // ✅ NEW: Debug image counter
     private var debugImageCounter = 0
-    private var enableDebugImages = true  // Set to true to save images
+    private var enableDebugImages = true
 
     companion object {
         const val NOTIFICATION_ID = 2
@@ -99,17 +105,17 @@ class ScreenCaptureService : Service() {
         createNotificationChannel()
         startImageProcessor()
         
-        // ✅ NEW: Clear old debug images on startup
         clearOldDebugImages()
         
-        Log.d(TAG, "✅ Service created with debug image saving: $enableDebugImages")
-        Log.d(TAG, "   Screen: ${screenWidth}x${screenHeight}, Density: $screenDensity")
+        Log.d(TAG, "✅ Service created with PARTIAL capture mode")
+        Log.d(TAG, "   Full Screen: ${screenWidth}x${screenHeight}")
+        Log.d(TAG, "   Board Crop: ${BOARD_CROP_WIDTH}x${BOARD_CROP_HEIGHT} at ($BOARD_CROP_X,$BOARD_CROP_Y)")
+        Log.d(TAG, "   Memory savings: ~${((1 - (BOARD_CROP_WIDTH * BOARD_CROP_HEIGHT).toFloat() / (screenWidth * screenHeight))) * 100}%")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "📱 onStartCommand called")
         
-        // ✅ NEW: Handle debug toggle
         if (intent?.action == "TOGGLE_DEBUG") {
             enableDebugImages = !enableDebugImages
             showToast("Debug images: ${if (enableDebugImages) "ON" else "OFF"}")
@@ -150,7 +156,7 @@ class ScreenCaptureService : Service() {
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "🎬 Starting continuous capture!")
+                        Log.d(TAG, "🎬 Starting continuous PARTIAL capture!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
@@ -171,9 +177,6 @@ class ScreenCaptureService : Service() {
         return START_STICKY
     }
     
-    /**
-     * ✅ NEW: Clear old debug images from /storage/emulated/0/Moves/
-     */
     private fun clearOldDebugImages() {
         try {
             val movesDir = java.io.File("/storage/emulated/0/Moves")
@@ -195,7 +198,7 @@ class ScreenCaptureService : Service() {
             "Screen Capture Service",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Captures screen for chess detection"
+            description = "Captures chess board region for detection"
             setShowBadge(false)
         }
         
@@ -215,7 +218,6 @@ class ScreenCaptureService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        // ✅ NEW: Add debug toggle action
         val debugIntent = Intent(this, ScreenCaptureService::class.java).apply {
             action = "TOGGLE_DEBUG"
         }
@@ -227,21 +229,16 @@ class ScreenCaptureService : Service() {
         )
         
         val displayText = if (count > 0) {
-            val cacheStatus = when {
-                cachedBoardCorners != null && cachedOrientation != null -> "Opt"
-                cachedBoardCorners != null -> "Partial"
-                else -> "Init"
-            }
             val gameStatus = if (gameStarted) " | ${appColor?.take(1)?.uppercase()}" else ""
             val uciInfo = if (lastValidUci != null) {
                 " | W:${lastValidUci!!.whitePieces.size} B:${lastValidUci!!.blackPieces.size}"
             } else ""
             val debugStatus = if (enableDebugImages) " | 📸" else ""
-            "$text (#$count-$cacheStatus$gameStatus$uciInfo$debugStatus)"
+            "$text (#$count-Crop$gameStatus$uciInfo$debugStatus)"
         } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("♟️ Chess Detector [DEBUG]")
+            .setContentTitle("♟️ Chess Detector [PARTIAL]")
             .setContentText(displayText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -262,7 +259,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
-        Log.d(TAG, "🔧 Setting up media projection...")
+        Log.d(TAG, "🔧 Setting up media projection for PARTIAL capture...")
         
         val mediaProjectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -274,13 +271,15 @@ class ScreenCaptureService : Service() {
         }
         Log.d(TAG, "✅ MediaProjection created")
 
+        // ✅ IMPORTANT: Still capture full screen, but we'll crop later
+        // This is because VirtualDisplay doesn't support offset capture
         imageReader = ImageReader.newInstance(
             screenWidth,
             screenHeight,
             PixelFormat.RGBA_8888,
             2
         )
-        Log.d(TAG, "✅ ImageReader created: ${screenWidth}x${screenHeight}")
+        Log.d(TAG, "✅ ImageReader created: ${screenWidth}x${screenHeight} (will crop to board)")
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ChessScreenCapture",
@@ -302,16 +301,15 @@ class ScreenCaptureService : Service() {
     }
 
     private fun startImageProcessor() {
-        Log.d(TAG, "🔄 Direct processing mode with JPEG conversion")
+        Log.d(TAG, "🔄 Direct processing mode with PARTIAL crop + JPEG")
     }
 
     private fun startContinuousCapture() {
         isCapturing = true
         captureCount = 0
-        debugImageCounter = 0  // ✅ NEW: Reset counter
+        debugImageCounter = 0
         lastValidUci = null
         previousValidUci = null
-        cachedBoardCorners = null
         cachedOrientation = null
         cachedUciCoordinates = null
         consecutiveErrors = 0
@@ -336,16 +334,11 @@ class ScreenCaptureService : Service() {
                 
                 captureCount++
                 
-                val statusMessage = when {
-                    cachedBoardCorners != null && cachedOrientation != null -> "🚀 Optimized"
-                    cachedBoardCorners != null -> "🚀 Partial"
-                    else -> "📸 Initial"
-                }
-                Log.d(TAG, "$statusMessage JPEG capture #$captureCount")
+                Log.d(TAG, "✂️ PARTIAL capture #$captureCount (${BOARD_CROP_WIDTH}x${BOARD_CROP_HEIGHT})")
                 
                 updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
                 
-                captureAndProcessWithJpegConversion()
+                captureAndProcessPartialWithJpeg()
                 
                 delay(CAPTURE_INTERVAL)
             }
@@ -358,8 +351,12 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private fun captureAndProcessWithJpegConversion() {
-        var rawBitmap: Bitmap? = null
+    /**
+     * ✅ NEW: Capture full screen, crop to board region, then convert to JPEG
+     */
+    private fun captureAndProcessPartialWithJpeg() {
+        var fullBitmap: Bitmap? = null
+        var croppedBitmap: Bitmap? = null
         var jpegBitmap: Bitmap? = null
         
         try {
@@ -370,22 +367,41 @@ class ScreenCaptureService : Service() {
             val image = imageReader?.acquireLatestImage()
             
             if (image != null) {
-                rawBitmap = imageToBitmap(image)
+                // Step 1: Get full screen bitmap
+                fullBitmap = imageToBitmap(image)
                 image.close()
                 
-                Log.d(TAG, "📥 Frame #$captureCount captured (raw RGBA)")
+                val fullSize = fullBitmap.byteCount / 1024
+                Log.d(TAG, "📥 Full screen captured: ${fullBitmap.width}x${fullBitmap.height} (${fullSize}KB)")
                 
-                jpegBitmap = convertToJpegFormat(rawBitmap)
-                rawBitmap.recycle()
-                rawBitmap = null
+                // Step 2: Crop to chess board region
+                croppedBitmap = Bitmap.createBitmap(
+                    fullBitmap,
+                    BOARD_CROP_X,
+                    BOARD_CROP_Y,
+                    BOARD_CROP_WIDTH,
+                    BOARD_CROP_HEIGHT
+                )
+                fullBitmap.recycle()
+                fullBitmap = null
                 
-                Log.d(TAG, "🎨 Frame #$captureCount converted to JPEG format")
+                val croppedSize = croppedBitmap.byteCount / 1024
+                val savings = ((1 - croppedSize.toFloat() / fullSize) * 100).toInt()
+                Log.d(TAG, "✂️ Cropped to board: ${croppedBitmap.width}x${croppedBitmap.height} (${croppedSize}KB, ${savings}% saved)")
                 
+                // Step 3: Convert to JPEG format
+                jpegBitmap = convertToJpegFormat(croppedBitmap)
+                croppedBitmap.recycle()
+                croppedBitmap = null
+                
+                Log.d(TAG, "🎨 Converted to JPEG format")
+                
+                // Step 4: Process the board
                 val bitmapToProcess = jpegBitmap
                 jpegBitmap = null
                 
                 runBlocking {
-                    processFrameAndExtractUci(bitmapToProcess, captureCount)
+                    processPartialFrameAndExtractUci(bitmapToProcess, captureCount)
                 }
                 
                 bitmapToProcess.recycle()
@@ -398,7 +414,8 @@ class ScreenCaptureService : Service() {
             Log.e(TAG, "❌ Error capturing/processing frame #$captureCount", e)
             consecutiveErrors++
             
-            rawBitmap?.recycle()
+            fullBitmap?.recycle()
+            croppedBitmap?.recycle()
             jpegBitmap?.recycle()
         } finally {
             isProcessing.set(false)
@@ -418,11 +435,9 @@ class ScreenCaptureService : Service() {
         val compressedSize = jpegBytes.size / 1024
         val compressionRatio = originalSize.toFloat() / compressedSize.toFloat()
         
-        Log.d(TAG, "   JPEG compression: ${originalSize}KB → ${compressedSize}KB (${compressionRatio}x, ${compressionTime}ms)")
+        Log.d(TAG, "   JPEG: ${originalSize}KB → ${compressedSize}KB (${compressionRatio}x, ${compressionTime}ms)")
         
         val jpegBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-        Log.d(TAG, "   JPEG decoded: ${jpegBitmap.width}x${jpegBitmap.height}")
-        
         return jpegBitmap
     }
 
@@ -442,29 +457,29 @@ class ScreenCaptureService : Service() {
         return Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
     }
 
-    private suspend fun processFrameAndExtractUci(bitmap: Bitmap, frameNumber: Int) {
+    /**
+     * ✅ NEW: Process pre-cropped board image (no board detection needed!)
+     */
+    private suspend fun processPartialFrameAndExtractUci(boardBitmap: Bitmap, frameNumber: Int) {
         try {
-            // ✅ UPDATED: Pass debug image parameters
-            val currentBoardState = if (cachedBoardCorners != null && cachedOrientation != null) {
-                getBoardStateFromBitmapWithCachedCorners(
-                    bitmap, 
-                    cachedBoardCorners!!, 
-                    "Frame #$frameNumber",
-                    cachedOrientation!!,
-                    this@ScreenCaptureService,
-                    saveDebugImage = enableDebugImages,  // ✅ NEW
-                    debugImageCounter = debugImageCounter  // ✅ NEW
+            // ✅ SIMPLIFIED: Board is already cropped, just detect pieces
+            // No corner detection needed since we captured exact board region
+            
+            // First time: detect orientation and setup coordinates
+            if (cachedOrientation == null) {
+                Log.d(TAG, "🔍 First capture - detecting orientation...")
+                val initialState = getBoardStateFromBitmap(
+                    boardBitmap, 
+                    "Frame #$frameNumber", 
+                    this@ScreenCaptureService
                 )
-            } else {
-                val state = getBoardStateFromBitmap(bitmap, "Frame #$frameNumber", this@ScreenCaptureService)
                 
-                if (state?.boardCorners != null && state.whiteOnBottom != null) {
-                    cachedBoardCorners = state.boardCorners
-                    cachedOrientation = state.whiteOnBottom
-                    cachedUciCoordinates = state.uciToScreenCoordinates
-                    consecutiveErrors = 0
+                if (initialState?.whiteOnBottom != null) {
+                    cachedOrientation = initialState.whiteOnBottom
+                    cachedUciCoordinates = initialState.uciToScreenCoordinates
                     
-                    Log.d(TAG, "✅ Cached board corners, orientation AND ${cachedUciCoordinates?.size} UCI coordinates")
+                    Log.d(TAG, "✅ Orientation: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
+                    Log.d(TAG, "✅ UCI coordinates cached: ${cachedUciCoordinates?.size} squares")
                     
                     if (!gameStarted && backendClient.hasBackendUrl()) {
                         val bottomColor = if (cachedOrientation == true) "white" else "black"
@@ -475,8 +490,35 @@ class ScreenCaptureService : Service() {
                         showToast("Board detected! Playing as ${if (cachedOrientation == true) "white" else "black"}")
                     }
                 }
-                state
+                
+                // Process first UCI
+                if (initialState != null) {
+                    val allPieces = initialState.white + initialState.black
+                    lastValidUci = UciSnapshot(
+                        allPieces = allPieces,
+                        whitePieces = initialState.white,
+                        blackPieces = initialState.black,
+                        captureNumber = frameNumber,
+                        timestamp = System.currentTimeMillis()
+                    )
+                    
+                    if (enableDebugImages) {
+                        debugImageCounter++
+                    }
+                }
+                
+                return
             }
+            
+            // ✅ Subsequent captures: Use fast detection without corner detection
+            val currentBoardState = getBoardStateFromBitmapDirectly(
+                boardBitmap,
+                "Frame #$frameNumber",
+                cachedOrientation!!,
+                this@ScreenCaptureService,
+                saveDebugImage = enableDebugImages,
+                debugImageCounter = debugImageCounter
+            )
             
             if (currentBoardState != null) {
                 val allPieces = currentBoardState.white + currentBoardState.black
@@ -488,25 +530,21 @@ class ScreenCaptureService : Service() {
                     timestamp = System.currentTimeMillis()
                 )
                 
-                Log.d(TAG, "📊 Frame #$frameNumber UCI: ${currentUci.totalPieceCount()} pieces (W:${currentUci.whitePieces.size}, B:${currentUci.blackPieces.size})")
+                Log.d(TAG, "📊 Frame #$frameNumber: ${currentUci.totalPieceCount()} pieces (W:${currentUci.whitePieces.size}, B:${currentUci.blackPieces.size})")
                 
+                // Noise filtering
                 if (lastValidUci != null && gameStarted) {
                     val pieceDifference = kotlin.math.abs(currentUci.totalPieceCount() - lastValidUci!!.totalPieceCount())
                     
                     if (pieceDifference > MAX_PIECE_DIFFERENCE) {
-                        Log.w(TAG, "🚫 NOISE DETECTED! Piece difference: $pieceDifference (max: $MAX_PIECE_DIFFERENCE)")
+                        Log.w(TAG, "🚫 NOISE! Difference: $pieceDifference")
                         return
                     }
-                    
-                    Log.d(TAG, "✅ Valid UCI change: $pieceDifference pieces difference")
-                } else if (lastValidUci == null) {
-                    Log.d(TAG, "ℹ️ First UCI capture - no noise filtering")
-                } else {
-                    Log.d(TAG, "ℹ️ Game not started yet - noise filtering disabled")
                 }
                 
                 consecutiveErrors = 0
                 
+                // Detect moves
                 if (previousValidUci != null && gameStarted && !waitingForBackendMove) {
                     detectMoveFromUciChange(previousValidUci!!, currentUci)
                 }
@@ -514,31 +552,18 @@ class ScreenCaptureService : Service() {
                 previousValidUci = lastValidUci
                 lastValidUci = currentUci
                 
-                // ✅ NEW: Increment debug counter only when pieces are successfully detected
                 if (enableDebugImages) {
                     debugImageCounter++
-                    Log.d(TAG, "📸 Debug image #$debugImageCounter saved")
                 }
-                
-                Log.d(TAG, "💾 Stored UCI snapshot #$frameNumber: ${currentUci.totalPieceCount()} pieces")
                 
             } else {
                 consecutiveErrors++
-                Log.w(TAG, "⚠️ No board detected in frame #$frameNumber (Error count: $consecutiveErrors)")
-                
-                if (consecutiveErrors >= maxConsecutiveErrors && cachedBoardCorners != null) {
-                    Log.w(TAG, "⚠️ Too many errors, but keeping game state")
-                    consecutiveErrors = 0
-                }
+                Log.w(TAG, "⚠️ Detection failed (Error: $consecutiveErrors)")
             }
+            
         } catch (e: Exception) {
             consecutiveErrors++
             Log.e(TAG, "❌ Error processing frame #$frameNumber", e)
-            
-            if (consecutiveErrors >= maxConsecutiveErrors && cachedBoardCorners != null) {
-                Log.w(TAG, "⚠️ Too many errors, but keeping game state")
-                consecutiveErrors = 0
-            }
         }
     }
 
@@ -579,7 +604,7 @@ class ScreenCaptureService : Service() {
                     
                     if (appColor == "white") {
                         if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
-                            Log.d(TAG, "✅ App is white - backend gave first move: $response")
+                            Log.d(TAG, "✅ First move: $response")
                             executeBackendMove(response)
                             isAppTurn = false
                         }
@@ -664,14 +689,13 @@ class ScreenCaptureService : Service() {
         gameStarted = false
         
         Log.d(TAG, "🛑 Service destroying...")
-        Log.d(TAG, "📸 Total debug images saved: $debugImageCounter")
+        Log.d(TAG, "📸 Total captures: $debugImageCounter")
         
         processingJob?.cancel()
         processingScope.cancel()
         
         lastValidUci = null
         previousValidUci = null
-        cachedBoardCorners = null
         cachedOrientation = null
         cachedUciCoordinates = null
         
