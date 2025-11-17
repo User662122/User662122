@@ -628,6 +628,98 @@ fun getBoardStateFromBitmapWithCachedCorners(
  * Draws white/black/gray rectangles on detected pieces
  * Saves to /storage/emulated/0/Moves/move{N}.jpeg
  */
+// ✅ NEW FUNCTION: Add this to ChessMoveDetector.kt after getBoardStateFromBitmapWithCachedCorners()
+
+/**
+ * ✅ NEW: Process pre-cropped board bitmap directly (no corner detection needed!)
+ * Used when capturing only the board region from screen coordinates
+ * 
+ * @param boardBitmap Pre-cropped bitmap of the chess board (already 698x701 from screen crop)
+ * @param boardName Debug name
+ * @param whiteOnBottom Cached orientation
+ * @param context Android context
+ * @param saveDebugImage Whether to save annotated debug image
+ * @param debugImageCounter Counter for debug image naming
+ */
+fun getBoardStateFromBitmapDirectly(
+    boardBitmap: Bitmap,
+    boardName: String,
+    whiteOnBottom: Boolean,
+    context: Context,
+    saveDebugImage: Boolean = false,
+    debugImageCounter: Int = 0
+): BoardState? {
+    Log.d("ChessDetector", "🚀 Direct processing (pre-cropped board)...")
+    
+    val img = Mat()
+    Utils.bitmapToMat(boardBitmap, img)
+    Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
+    
+    if (img.empty()) {
+        img.release()
+        return null
+    }
+    
+    // ✅ Resize the pre-cropped board to standard 800x800
+    val boardWarped = Mat()
+    Imgproc.resize(img, boardWarped, Size(BOARD_SIZE.toDouble(), BOARD_SIZE.toDouble()))
+    img.release()
+    
+    Log.d("ChessDetector", "   Resized to: ${boardWarped.cols()}x${boardWarped.rows()}")
+    
+    // Detect pieces
+    val pieceSquares = detectPieceSquares(boardWarped)
+    val currentSquares = pieceSquares.toSet()
+    
+    // Classify piece colors
+    val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
+    val classifier = PieceColorClassifier(context)
+    val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
+    classifier.close()
+    
+    // Apply UCI mapping with cached orientation
+    val uciResults = applyUciMapping(pieceTypes, whiteOnBottom)
+    
+    val lightPieces = mutableSetOf<String>()
+    val darkPieces = mutableSetOf<String>()
+    val ambiguousPieces = mutableSetOf<String>()
+    
+    for ((uciSquare, pieceType) in uciResults) {
+        when (pieceType) {
+            "white" -> lightPieces.add(uciSquare)
+            "black" -> darkPieces.add(uciSquare)
+            "ambiguous" -> ambiguousPieces.add(uciSquare)
+        }
+    }
+    
+    Log.d("ChessDetector", "✅ Detected: ${lightPieces.size}W + ${darkPieces.size}B = ${lightPieces.size + darkPieces.size} pieces")
+    
+    // Save debug image if requested
+    if (saveDebugImage) {
+        saveAnnotatedDebugImage(
+            boardWarped,
+            pieceSquares,
+            pieceTypes,
+            context,
+            debugImageCounter,
+            lightPieces.size,
+            darkPieces.size
+        )
+    }
+    
+    boardWarped.release()
+    
+    return BoardState(
+        white = lightPieces,
+        black = darkPieces,
+        ambiguous = ambiguousPieces,
+        annotatedBoard = null,
+        boardCorners = null,
+        whiteOnBottom = whiteOnBottom,
+        uciToScreenCoordinates = null,
+        detectedSquares = currentSquares
+    )
+}
 private fun saveAnnotatedDebugImage(
     boardWarped: Mat,
     pieceSquares: List<Pair<Int, Int>>,
