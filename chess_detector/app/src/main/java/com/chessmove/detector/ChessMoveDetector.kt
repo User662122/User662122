@@ -36,14 +36,6 @@ data class SquareData(
     val bitmap: Bitmap
 )
 
-private data class UciCache(
-    val detectedSquares: Set<Pair<Int, Int>>,
-    val pieceColors: Map<Pair<Int, Int>, String>,
-    val timestamp: Long
-)
-
-private var lastUciCache: UciCache? = null
-
 // ===============================
 // CORE FUNCTIONS
 // ===============================
@@ -283,61 +275,25 @@ private fun extractSquareBitmaps(boardWarped: Mat, pieceSquares: List<Pair<Int, 
 }
 
 /**
- * Check if UCI positions match cached positions
+ * ✅ NO CACHING - Always classify fresh with TFLite
  */
-private fun shouldSkipColorClassification(
-    currentSquares: Set<Pair<Int, Int>>,
-    cache: UciCache?
-): Boolean {
-    if (cache == null) {
-        Log.d("ChessDetector", "🆕 No cache - first detection")
-        return false
-    }
-    
-    val isSame = currentSquares == cache.detectedSquares
-    
-    if (isSame) {
-        val age = System.currentTimeMillis() - cache.timestamp
-        Log.d("ChessDetector", "♻️ UCI CACHE HIT! Skipping TFLite (cache age: ${age}ms)")
-    } else {
-        Log.d("ChessDetector", "🔄 UCI changed: ${cache.detectedSquares.size} → ${currentSquares.size} pieces")
-    }
-    
-    return isSame
-}
-
-/**
- * Classify piece colors with caching
- */
-private fun classifyPieceColorsWithCache(
+private fun classifyPieceColors(
     squareDataList: List<SquareData>,
-    classifier: PieceColorClassifier,
-    currentSquares: Set<Pair<Int, Int>>
+    classifier: PieceColorClassifier
 ): Map<Pair<Int, Int>, String> {
-    
-    if (shouldSkipColorClassification(currentSquares, lastUciCache)) {
-        squareDataList.forEach { it.bitmap.recycle() }
-        return lastUciCache!!.pieceColors
-    }
     
     val startTime = System.currentTimeMillis()
     val bitmaps = squareDataList.map { it.bitmap }
     val colors = classifier.classifyBatch(bitmaps)
     val elapsedTime = System.currentTimeMillis() - startTime
     
-    Log.d("ChessDetector", "🤖 TFLite: ${colors.size} pieces in ${elapsedTime}ms")
+    Log.d("ChessDetector", "🤖 TFLite: ${colors.size} pieces in ${elapsedTime}ms (NO CACHE)")
     
     val pieceTypes = mutableMapOf<Pair<Int, Int>, String>()
     for ((index, squareData) in squareDataList.withIndex()) {
         pieceTypes[Pair(squareData.row, squareData.col)] = colors[index]
         squareData.bitmap.recycle()
     }
-    
-    lastUciCache = UciCache(
-        detectedSquares = currentSquares,
-        pieceColors = pieceTypes,
-        timestamp = System.currentTimeMillis()
-    )
     
     return pieceTypes
 }
@@ -432,11 +388,6 @@ private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, andr
     return coordinatesMap
 }
 
-fun clearUciCache() {
-    lastUciCache = null
-    Log.d("ChessDetector", "🗑️ UCI cache cleared")
-}
-
 // ===============================
 // MAIN ENTRY POINTS
 // ===============================
@@ -445,7 +396,7 @@ fun clearUciCache() {
  * Get board state from bitmap (first detection)
  */
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context): BoardState? {
-    Log.d("ChessDetector", "🔬 Processing board (IMPROVED Python method)...")
+    Log.d("ChessDetector", "🔬 Processing board (NO CACHING MODE)...")
     
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
@@ -474,13 +425,13 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     val boardWarped = createWarpedBoard(resized, innerPts)
     resized.release()
     
-    // ✅ IMPROVED: Use new Python-based detection
+    // ✅ NO CACHING: Always run fresh detection
     val pieceSquares = detectPieceSquares(boardWarped)
     val currentSquares = pieceSquares.toSet()
     
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
+    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE
     classifier.close()
     
     val whiteOnBottom = detectBoardOrientation(pieceSquares, pieceTypes)
@@ -539,7 +490,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
 }
 
 /**
- * Get board state with cached corners (with optional debug image saving)
+ * ✅ NO CACHING VERSION - Identical to gallery image processing
  */
 fun getBoardStateFromBitmapWithCachedCorners(
     bitmap: Bitmap,
@@ -550,7 +501,7 @@ fun getBoardStateFromBitmapWithCachedCorners(
     saveDebugImage: Boolean = false,
     debugImageCounter: Int = 0
 ): BoardState? {
-    Log.d("ChessDetector", "🚀 Processing with cached corners...")
+    Log.d("ChessDetector", "🚀 Processing with cached corners (NO CACHING)...")
     
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
@@ -573,13 +524,13 @@ fun getBoardStateFromBitmapWithCachedCorners(
     resized.release()
     innerPts.release()
     
-    // ✅ IMPROVED: Use new detection method
+    // ✅ NO CACHING: Always run fresh detection and classification
     val pieceSquares = detectPieceSquares(boardWarped)
     val currentSquares = pieceSquares.toSet()
     
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
+    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE
     classifier.close()
     
     val uciResults = applyUciMapping(pieceTypes, cachedWhiteOnBottom)
@@ -596,7 +547,7 @@ fun getBoardStateFromBitmapWithCachedCorners(
         }
     }
     
-    // ✅ NEW: Create and save debug annotated image if requested
+    // Save debug annotated image if requested
     if (saveDebugImage) {
         saveAnnotatedDebugImage(
             boardWarped,
@@ -624,22 +575,8 @@ fun getBoardStateFromBitmapWithCachedCorners(
 }
 
 /**
- * ✅ NEW: Save annotated debug image to gallery
- * Draws white/black/gray rectangles on detected pieces
- * Saves to /storage/emulated/0/Moves/move{N}.jpeg
- */
-// ✅ NEW FUNCTION: Add this to ChessMoveDetector.kt after getBoardStateFromBitmapWithCachedCorners()
-
-/**
- * ✅ NEW: Process pre-cropped board bitmap directly (no corner detection needed!)
- * Used when capturing only the board region from screen coordinates
- * 
- * @param boardBitmap Pre-cropped bitmap of the chess board (already 698x701 from screen crop)
- * @param boardName Debug name
- * @param whiteOnBottom Cached orientation
- * @param context Android context
- * @param saveDebugImage Whether to save annotated debug image
- * @param debugImageCounter Counter for debug image naming
+ * ✅ NO CACHING: Process pre-cropped board bitmap directly
+ * 100% IDENTICAL to gallery image processing
  */
 fun getBoardStateFromBitmapDirectly(
     boardBitmap: Bitmap,
@@ -649,7 +586,7 @@ fun getBoardStateFromBitmapDirectly(
     saveDebugImage: Boolean = false,
     debugImageCounter: Int = 0
 ): BoardState? {
-    Log.d("ChessDetector", "🚀 Direct processing (pre-cropped board)...")
+    Log.d("ChessDetector", "🚀 Direct processing (NO CACHING - 100% like gallery)...")
     
     val img = Mat()
     Utils.bitmapToMat(boardBitmap, img)
@@ -660,21 +597,21 @@ fun getBoardStateFromBitmapDirectly(
         return null
     }
     
-    // ✅ Resize the pre-cropped board to standard 800x800
+    // Resize to standard 800x800
     val boardWarped = Mat()
     Imgproc.resize(img, boardWarped, Size(BOARD_SIZE.toDouble(), BOARD_SIZE.toDouble()))
     img.release()
     
     Log.d("ChessDetector", "   Resized to: ${boardWarped.cols()}x${boardWarped.rows()}")
     
-    // Detect pieces
+    // ✅ NO CACHING: Always detect fresh
     val pieceSquares = detectPieceSquares(boardWarped)
     val currentSquares = pieceSquares.toSet()
     
-    // Classify piece colors
+    // ✅ NO CACHING: Always classify fresh with TFLite
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColorsWithCache(squareDataList, classifier, currentSquares)
+    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE HERE!
     classifier.close()
     
     // Apply UCI mapping with cached orientation
@@ -694,7 +631,7 @@ fun getBoardStateFromBitmapDirectly(
     
     Log.d("ChessDetector", "✅ Detected: ${lightPieces.size}W + ${darkPieces.size}B = ${lightPieces.size + darkPieces.size} pieces")
     
-    // Save debug image if requested
+    // Save debug image if requested (same code as gallery)
     if (saveDebugImage) {
         saveAnnotatedDebugImage(
             boardWarped,
@@ -720,6 +657,7 @@ fun getBoardStateFromBitmapDirectly(
         detectedSquares = currentSquares
     )
 }
+
 private fun saveAnnotatedDebugImage(
     boardWarped: Mat,
     pieceSquares: List<Pair<Int, Int>>,
@@ -813,7 +751,7 @@ private fun saveAnnotatedDebugImage(
 }
 
 /**
- * ✅ FIXED: Save bitmap to Pictures/ChessMoves/ using MediaStore (Android 10+)
+ * Save bitmap to Pictures/ChessMoves/ using MediaStore (Android 10+)
  */
 private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int): Boolean {
     return try {
@@ -883,3 +821,4 @@ private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int
         false
     }
 }
+            
