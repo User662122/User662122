@@ -24,7 +24,7 @@ class PieceColorClassifier(context: Context) {
     
     companion object {
         const val TAG = "PieceColorClassifier"
-        const val MODEL_PATH = "white_black_empty_classifier_mobilenetv2_96x96.tflite"
+        const val MODEL_PATH = "white_black_empty_classifier_96x96.tflite"
         const val INPUT_SIZE = 96
         private const val PIXEL_SIZE = 3 // RGB
         private const val NUM_INSTANCES = 8  // Fixed 8 instances for 8 cores
