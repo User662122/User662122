@@ -6,17 +6,13 @@ import android.util.Log
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
-import kotlin.math.max
-import kotlin.math.min
 
 // ===============================
 // CONSTANTS AND CONFIGURATION
 // ===============================
 const val BOARD_SIZE = 800
 const val CELL_SIZE = BOARD_SIZE / 8
-
-// ✅ IMPROVED: Match Python code exactly
-const val PIECE_THRESHOLD = 15.0  // Fixed 15% threshold
+const val PIECE_THRESHOLD = 15.0
 const val SHRINK_FACTOR = 0.962
 
 data class BoardState(
@@ -26,8 +22,7 @@ data class BoardState(
     val annotatedBoard: Bitmap? = null,
     val boardCorners: Array<Point>? = null,
     val whiteOnBottom: Boolean? = null,
-    val uciToScreenCoordinates: Map<String, android.graphics.Point>? = null,
-    val detectedSquares: Set<Pair<Int, Int>>? = null
+    val uciToScreenCoordinates: Map<String, android.graphics.Point>? = null
 )
 
 data class SquareData(
@@ -152,57 +147,23 @@ private fun createWarpedBoard(img: Mat, innerPts: MatOfPoint2f): Mat {
 }
 
 /**
- * ✅ IMPROVED: Detect pieces using EXACT Python approach
- * 1. Invert image (bitwise_not)
- * 2. Convert to grayscale
- * 3. Apply adaptive threshold (optional, for debugging)
- * 4. Apply Canny edge detection
- * 5. Dilate edges (3x3 kernel, 1 iteration)
- * 6. Calculate non-zero pixels per square with 15% threshold
+ * Detect pieces using Python-based OpenCV approach
  */
 private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
-    Log.d("ChessDetector", "🔍 Starting IMPROVED piece detection (Python method)")
-    
-    // STEP 1: Invert the image (bitwise NOT)
     val inverted = Mat()
     Core.bitwise_not(boardWarped, inverted)
-    Log.d("ChessDetector", "   ✅ Step 1: Inverted image")
     
-    // STEP 2: Convert to grayscale
     val grayInverted = Mat()
     Imgproc.cvtColor(inverted, grayInverted, Imgproc.COLOR_BGR2GRAY)
-    Log.d("ChessDetector", "   ✅ Step 2: Converted to grayscale")
     
-    // STEP 3: Apply adaptive threshold (optional for visualization)
-    val adaptiveInverted = Mat()
-    Imgproc.adaptiveThreshold(
-        grayInverted,
-        adaptiveInverted,
-        255.0,
-        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
-        Imgproc.THRESH_BINARY,
-        11,
-        2.0
-    )
-    Log.d("ChessDetector", "   ✅ Step 3: Applied adaptive threshold")
-    
-    // STEP 4: Apply Canny edge detection
     val edgesInverted = Mat()
     Imgproc.Canny(grayInverted, edgesInverted, 50.0, 150.0)
-    Log.d("ChessDetector", "   ✅ Step 4: Applied Canny edge detection")
     
-    // STEP 5: Dilate edges (3x3 kernel, 1 iteration)
     val kernel = Mat.ones(3, 3, CvType.CV_8U)
     val dilatedInverted = Mat()
     Imgproc.dilate(edgesInverted, dilatedInverted, kernel, Point(-1.0, -1.0), 1)
-    Log.d("ChessDetector", "   ✅ Step 5: Dilated edges (3x3, 1 iteration)")
     
-    // STEP 6: Analyze each square with 15% threshold
     val pieceSquares = mutableListOf<Pair<Int, Int>>()
-    
-    Log.d("ChessDetector", "   Board size: ${boardWarped.cols()}x${boardWarped.rows()}")
-    Log.d("ChessDetector", "   Each square: ${CELL_SIZE}x${CELL_SIZE}")
-    Log.d("ChessDetector", "   Using FIXED ${PIECE_THRESHOLD}% threshold")
     
     for (row in 0 until 8) {
         for (col in 0 until 8) {
@@ -211,42 +172,26 @@ private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
             val x1 = col * CELL_SIZE
             val x2 = (col + 1) * CELL_SIZE
             
-            // Extract square from dilated edge image
             val square = dilatedInverted.submat(y1, y2, x1, x2)
-            
-            // Calculate non-zero pixels percentage
             val totalPixels = square.total().toDouble()
             val nonZeroPixels = Core.countNonZero(square).toDouble()
             val percentage = (nonZeroPixels / totalPixels) * 100.0
             
-            // Apply 15% threshold
             if (percentage > PIECE_THRESHOLD) {
                 pieceSquares.add(Pair(row, col))
-                Log.d("ChessDetector", "      PIECE at ($row, $col): ${"%.1f".format(percentage)}%")
-            } else {
-                Log.d("ChessDetector", "      EMPTY at ($row, $col): ${"%.1f".format(percentage)}%")
             }
             
             square.release()
         }
     }
     
-    // Cleanup
     inverted.release()
     grayInverted.release()
-    adaptiveInverted.release()
     edgesInverted.release()
     kernel.release()
     dilatedInverted.release()
     
-    Log.d("ChessDetector", "✅ IMPROVED detection complete: ${pieceSquares.size} pieces found")
-    Log.d("ChessDetector", "   Expected: 32 pieces (in standard position)")
-    
-    if (pieceSquares.size > 34) {
-        Log.w("ChessDetector", "   ⚠️ WARNING: Too many pieces detected! Likely noise.")
-    } else if (pieceSquares.size < 30) {
-        Log.w("ChessDetector", "   ⚠️ WARNING: Too few pieces detected! Check lighting/threshold.")
-    }
+    Log.d("ChessDetector", "✅ Detected ${pieceSquares.size} pieces")
     
     return pieceSquares
 }
@@ -275,7 +220,7 @@ private fun extractSquareBitmaps(boardWarped: Mat, pieceSquares: List<Pair<Int, 
 }
 
 /**
- * ✅ NO CACHING - Always classify fresh with TFLite
+ * Classify piece colors with TFLite (NO CACHING)
  */
 private fun classifyPieceColors(
     squareDataList: List<SquareData>,
@@ -287,7 +232,7 @@ private fun classifyPieceColors(
     val colors = classifier.classifyBatch(bitmaps)
     val elapsedTime = System.currentTimeMillis() - startTime
     
-    Log.d("ChessDetector", "🤖 TFLite: ${colors.size} pieces in ${elapsedTime}ms (NO CACHE)")
+    Log.d("ChessDetector", "🤖 TFLite: ${colors.size} pieces in ${elapsedTime}ms")
     
     val pieceTypes = mutableMapOf<Pair<Int, Int>, String>()
     for ((index, squareData) in squareDataList.withIndex()) {
@@ -354,7 +299,7 @@ private fun applyUciMapping(
 }
 
 /**
- * Generate hardcoded UCI coordinates
+ * Generate hardcoded UCI coordinates for screen tapping
  */
 private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, android.graphics.Point> {
     val coordinatesMap = mutableMapOf<String, android.graphics.Point>()
@@ -389,14 +334,15 @@ private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, andr
 }
 
 // ===============================
-// MAIN ENTRY POINTS
+// MAIN ENTRY POINTS (ONLY 2 FUNCTIONS!)
 // ===============================
 
 /**
- * Get board state from bitmap (first detection)
+ * ✅ ONLY USED FOR FIRST DETECTION (orientation + corners + UCI coordinates)
+ * Used by: MainActivity (first time), ScreenCaptureService (first capture)
  */
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context): BoardState? {
-    Log.d("ChessDetector", "🔬 Processing board (NO CACHING MODE)...")
+    Log.d("ChessDetector", "🔬 First detection (corner detection + orientation)...")
     
     val img = Mat()
     Utils.bitmapToMat(bitmap, img)
@@ -425,13 +371,10 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     val boardWarped = createWarpedBoard(resized, innerPts)
     resized.release()
     
-    // ✅ NO CACHING: Always run fresh detection
     val pieceSquares = detectPieceSquares(boardWarped)
-    val currentSquares = pieceSquares.toSet()
-    
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE
+    val pieceTypes = classifyPieceColors(squareDataList, classifier)
     classifier.close()
     
     val whiteOnBottom = detectBoardOrientation(pieceSquares, pieceTypes)
@@ -449,7 +392,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         }
     }
     
-    Log.d("ChessDetector", "✅ Final: ${lightPieces.size} white, ${darkPieces.size} black")
+    Log.d("ChessDetector", "✅ First detection: ${lightPieces.size}W, ${darkPieces.size}B")
     
     // Create annotated image
     val annotated = boardWarped.clone()
@@ -471,7 +414,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     
     val annotatedBitmap = Bitmap.createBitmap(annotated.cols(), annotated.rows(), Bitmap.Config.ARGB_8888)
     Utils.matToBitmap(annotated, annotatedBitmap)
-    
     annotated.release()
     boardWarped.release()
     
@@ -484,99 +426,16 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         annotatedBoard = annotatedBitmap,
         boardCorners = innerPts.toArray(),
         whiteOnBottom = whiteOnBottom,
-        uciToScreenCoordinates = uciCoordinates,
-        detectedSquares = currentSquares
+        uciToScreenCoordinates = uciCoordinates
     )
 }
 
 /**
- * ✅ NO CACHING VERSION - Identical to gallery image processing
- */
-fun getBoardStateFromBitmapWithCachedCorners(
-    bitmap: Bitmap,
-    cachedCorners: Array<Point>,
-    boardName: String,
-    cachedWhiteOnBottom: Boolean,
-    context: Context,
-    saveDebugImage: Boolean = false,
-    debugImageCounter: Int = 0
-): BoardState? {
-    Log.d("ChessDetector", "🚀 Processing with cached corners (NO CACHING)...")
-    
-    val img = Mat()
-    Utils.bitmapToMat(bitmap, img)
-    Imgproc.cvtColor(img, img, Imgproc.COLOR_RGBA2BGR)
-    
-    if (img.empty()) {
-        img.release()
-        return null
-    }
-    
-    val resized = Mat()
-    val aspectRatio = img.width().toDouble() / img.height()
-    val newWidth = 900
-    val newHeight = (newWidth / aspectRatio).toInt()
-    Imgproc.resize(img, resized, Size(newWidth.toDouble(), newHeight.toDouble()))
-    img.release()
-    
-    val innerPts = MatOfPoint2f(*cachedCorners)
-    val boardWarped = createWarpedBoard(resized, innerPts)
-    resized.release()
-    innerPts.release()
-    
-    // ✅ NO CACHING: Always run fresh detection and classification
-    val pieceSquares = detectPieceSquares(boardWarped)
-    val currentSquares = pieceSquares.toSet()
-    
-    val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
-    val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE
-    classifier.close()
-    
-    val uciResults = applyUciMapping(pieceTypes, cachedWhiteOnBottom)
-    
-    val lightPieces = mutableSetOf<String>()
-    val darkPieces = mutableSetOf<String>()
-    val ambiguousPieces = mutableSetOf<String>()
-    
-    for ((uciSquare, pieceType) in uciResults) {
-        when (pieceType) {
-            "white" -> lightPieces.add(uciSquare)
-            "black" -> darkPieces.add(uciSquare)
-            "ambiguous" -> ambiguousPieces.add(uciSquare)
-        }
-    }
-    
-    // Save debug annotated image if requested
-    if (saveDebugImage) {
-        saveAnnotatedDebugImage(
-            boardWarped,
-            pieceSquares,
-            pieceTypes,
-            context,
-            debugImageCounter,
-            lightPieces.size,
-            darkPieces.size
-        )
-    }
-    
-    boardWarped.release()
-    
-    return BoardState(
-        white = lightPieces,
-        black = darkPieces,
-        ambiguous = ambiguousPieces,
-        annotatedBoard = null,
-        boardCorners = null,
-        whiteOnBottom = cachedWhiteOnBottom,
-        uciToScreenCoordinates = null,
-        detectedSquares = currentSquares
-    )
-}
-
-/**
- * ✅ NO CACHING: Process pre-cropped board bitmap directly
- * 100% IDENTICAL to gallery image processing
+ * ✅ MAIN WORKHORSE - Used for ALL subsequent detections
+ * Used by: MainActivity (after first), ScreenCaptureService (all captures)
+ * 
+ * Takes pre-cropped board bitmap, resizes to 800x800, detects pieces, classifies colors
+ * 100% IDENTICAL processing for both in-app and live capture
  */
 fun getBoardStateFromBitmapDirectly(
     boardBitmap: Bitmap,
@@ -586,7 +445,7 @@ fun getBoardStateFromBitmapDirectly(
     saveDebugImage: Boolean = false,
     debugImageCounter: Int = 0
 ): BoardState? {
-    Log.d("ChessDetector", "🚀 Direct processing (NO CACHING - 100% like gallery)...")
+    Log.d("ChessDetector", "🚀 Direct detection (pre-cropped, cached orientation)...")
     
     val img = Mat()
     Utils.bitmapToMat(boardBitmap, img)
@@ -602,16 +461,13 @@ fun getBoardStateFromBitmapDirectly(
     Imgproc.resize(img, boardWarped, Size(BOARD_SIZE.toDouble(), BOARD_SIZE.toDouble()))
     img.release()
     
-    Log.d("ChessDetector", "   Resized to: ${boardWarped.cols()}x${boardWarped.rows()}")
-    
-    // ✅ NO CACHING: Always detect fresh
+    // Detect pieces
     val pieceSquares = detectPieceSquares(boardWarped)
-    val currentSquares = pieceSquares.toSet()
     
-    // ✅ NO CACHING: Always classify fresh with TFLite
+    // Classify colors with TFLite (NO CACHING)
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
-    val pieceTypes = classifyPieceColors(squareDataList, classifier)  // NO CACHE HERE!
+    val pieceTypes = classifyPieceColors(squareDataList, classifier)
     classifier.close()
     
     // Apply UCI mapping with cached orientation
@@ -629,9 +485,9 @@ fun getBoardStateFromBitmapDirectly(
         }
     }
     
-    Log.d("ChessDetector", "✅ Detected: ${lightPieces.size}W + ${darkPieces.size}B = ${lightPieces.size + darkPieces.size} pieces")
+    Log.d("ChessDetector", "✅ Detection: ${lightPieces.size}W + ${darkPieces.size}B")
     
-    // Save debug image if requested (same code as gallery)
+    // Save debug image if requested
     if (saveDebugImage) {
         saveAnnotatedDebugImage(
             boardWarped,
@@ -653,10 +509,13 @@ fun getBoardStateFromBitmapDirectly(
         annotatedBoard = null,
         boardCorners = null,
         whiteOnBottom = whiteOnBottom,
-        uciToScreenCoordinates = null,
-        detectedSquares = currentSquares
+        uciToScreenCoordinates = null
     )
 }
+
+// ===============================
+// DEBUG IMAGE SAVING
+// ===============================
 
 private fun saveAnnotatedDebugImage(
     boardWarped: Mat,
@@ -668,33 +527,28 @@ private fun saveAnnotatedDebugImage(
     blackCount: Int
 ) {
     try {
-        // Create annotated image
         val annotated = boardWarped.clone()
         
-        // Draw rectangles for each detected piece
         for ((row, col) in pieceSquares) {
             val x1 = col * CELL_SIZE
             val y1 = row * CELL_SIZE
             val x2 = x1 + CELL_SIZE
             val y2 = y1 + CELL_SIZE
             
-            // Color based on piece type
             val color = when (pieceTypes[Pair(row, col)]) {
-                "white" -> Scalar(255.0, 255.0, 255.0)  // White
-                "black" -> Scalar(0.0, 0.0, 0.0)        // Black
-                else -> Scalar(128.0, 128.0, 128.0)     // Gray for ambiguous
+                "white" -> Scalar(255.0, 255.0, 255.0)
+                "black" -> Scalar(0.0, 0.0, 0.0)
+                else -> Scalar(128.0, 128.0, 128.0)
             }
             
-            // Draw thick rectangle
             Imgproc.rectangle(
                 annotated,
                 Point(x1.toDouble(), y1.toDouble()),
                 Point(x2.toDouble(), y2.toDouble()),
                 color,
-                6  // Thicker for better visibility
+                6
             )
             
-            // Add text label showing piece type
             val label = when (pieceTypes[Pair(row, col)]) {
                 "white" -> "W"
                 "black" -> "B"
@@ -712,7 +566,6 @@ private fun saveAnnotatedDebugImage(
             )
         }
         
-        // Add summary text at the top
         val summaryText = "W:$whiteCount B:$blackCount Total:${pieceSquares.size}"
         Imgproc.putText(
             annotated,
@@ -720,11 +573,10 @@ private fun saveAnnotatedDebugImage(
             Point(10.0, 40.0),
             Imgproc.FONT_HERSHEY_SIMPLEX,
             1.2,
-            Scalar(255.0, 0.0, 0.0),  // Red text
+            Scalar(255.0, 0.0, 0.0),
             3
         )
         
-        // Convert Mat to Bitmap
         val annotatedBitmap = Bitmap.createBitmap(
             annotated.cols(),
             annotated.rows(),
@@ -733,16 +585,11 @@ private fun saveAnnotatedDebugImage(
         Utils.matToBitmap(annotated, annotatedBitmap)
         annotated.release()
         
-        // Save to gallery
         val saved = saveImageToGallery(context, annotatedBitmap, moveNumber)
         annotatedBitmap.recycle()
         
         if (saved) {
             Log.d("ChessDetector", "📸 Debug image saved: move$moveNumber.jpeg")
-            Log.d("ChessDetector", "   Location: /storage/emulated/0/Moves/move$moveNumber.jpeg")
-            Log.d("ChessDetector", "   Pieces: $whiteCount white, $blackCount black")
-        } else {
-            Log.e("ChessDetector", "❌ Failed to save debug image")
         }
         
     } catch (e: Exception) {
@@ -750,14 +597,10 @@ private fun saveAnnotatedDebugImage(
     }
 }
 
-/**
- * Save bitmap to Pictures/ChessMoves/ using MediaStore (Android 10+)
- */
 private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int): Boolean {
     return try {
         val fileName = "move$moveNumber.jpeg"
         
-        // Use MediaStore for Android 10+ compatibility
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             val contentValues = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -777,28 +620,22 @@ private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                 }
                 
-                // Mark as not pending (makes it visible)
                 contentValues.clear()
                 contentValues.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(imageUri, contentValues, null, null)
                 
-                Log.d("ChessDetector", "✅ Saved to Pictures/ChessMoves/$fileName")
-                Log.d("ChessDetector", "   URI: $imageUri")
                 true
             } else {
-                Log.e("ChessDetector", "❌ Failed to create MediaStore entry")
                 false
             }
         } else {
-            // Fallback for Android 9 and below
             val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(
                 android.os.Environment.DIRECTORY_PICTURES
             )
             val movesDir = java.io.File(picturesDir, "ChessMoves")
             
             if (!movesDir.exists()) {
-                val created = movesDir.mkdirs()
-                Log.d("ChessDetector", "📁 Created directory: $created")
+                movesDir.mkdirs()
             }
             
             val file = java.io.File(movesDir, fileName)
@@ -807,18 +644,14 @@ private fun saveImageToGallery(context: Context, bitmap: Bitmap, moveNumber: Int
             outputStream.flush()
             outputStream.close()
             
-            // Notify media scanner
             val intent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
             intent.data = android.net.Uri.fromFile(file)
             context.sendBroadcast(intent)
             
-            Log.d("ChessDetector", "✅ Saved: ${file.absolutePath}")
             true
         }
     } catch (e: Exception) {
         Log.e("ChessDetector", "❌ Error saving image: ${e.message}", e)
-        e.printStackTrace()
         false
     }
 }
-            
