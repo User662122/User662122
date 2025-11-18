@@ -12,7 +12,7 @@ import org.opencv.imgproc.Imgproc
 // ===============================
 const val BOARD_SIZE = 800
 const val CELL_SIZE = BOARD_SIZE / 8
-const val PIECE_THRESHOLD = 15.0
+const val PIECE_THRESHOLD = 15.0  // ✅ Matches Python exactly
 const val SHRINK_FACTOR = 0.962
 
 data class BoardState(
@@ -48,9 +48,10 @@ private fun detectChessboard(img: Mat): MatOfPoint2f? {
     val edges = Mat()
     Imgproc.Canny(blurred, edges, 40.0, 150.0)
     
-    val kernel = Mat()
+    val kernel = Mat.ones(3, 3, CvType.CV_8U)  // ✅ Proper kernel
     Imgproc.dilate(edges, edges, kernel, Point(-1.0, -1.0), 2)
     Imgproc.erode(edges, edges, kernel, Point(-1.0, -1.0), 1)
+    kernel.release()
     
     val contours = ArrayList<MatOfPoint>()
     val hierarchy = Mat()
@@ -147,22 +148,34 @@ private fun createWarpedBoard(img: Mat, innerPts: MatOfPoint2f): Mat {
 }
 
 /**
- * Detect pieces using Python-based OpenCV approach
+ * ✅ FIXED: Detect pieces using EXACT Python logic
+ * Now matches Python 100%: invert -> grayscale -> Canny -> dilate
  */
 private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
+    // ✅ Step 1: Invert (matches Python: cv2.bitwise_not)
     val inverted = Mat()
     Core.bitwise_not(boardWarped, inverted)
     
+    // ✅ Step 2: Convert to grayscale (matches Python: cv2.cvtColor)
     val grayInverted = Mat()
     Imgproc.cvtColor(inverted, grayInverted, Imgproc.COLOR_BGR2GRAY)
+    inverted.release()
     
+    // ✅ Step 3: Canny edges (matches Python: cv2.Canny(gray_inverted, 50, 150))
     val edgesInverted = Mat()
     Imgproc.Canny(grayInverted, edgesInverted, 50.0, 150.0)
+    grayInverted.release()
     
+    // ✅ Step 4: Create proper 3x3 kernel of ones (CRITICAL FIX!)
     val kernel = Mat.ones(3, 3, CvType.CV_8U)
+    
+    // ✅ Step 5: Dilate with iterations=1 (matches Python: cv2.dilate(..., iterations=1))
     val dilatedInverted = Mat()
     Imgproc.dilate(edgesInverted, dilatedInverted, kernel, Point(-1.0, -1.0), 1)
+    edgesInverted.release()
+    kernel.release()
     
+    // ✅ Step 6: Check each square with 15% threshold
     val pieceSquares = mutableListOf<Pair<Int, Int>>()
     
     for (row in 0 until 8) {
@@ -177,6 +190,7 @@ private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
             val nonZeroPixels = Core.countNonZero(square).toDouble()
             val percentage = (nonZeroPixels / totalPixels) * 100.0
             
+            // ✅ EXACT Python logic: if percentage > 15.0
             if (percentage > PIECE_THRESHOLD) {
                 pieceSquares.add(Pair(row, col))
             }
@@ -185,13 +199,9 @@ private fun detectPieceSquares(boardWarped: Mat): List<Pair<Int, Int>> {
         }
     }
     
-    inverted.release()
-    grayInverted.release()
-    edgesInverted.release()
-    kernel.release()
     dilatedInverted.release()
     
-    Log.d("ChessDetector", "✅ Detected ${pieceSquares.size} pieces")
+    Log.d("ChessDetector", "✅ Detected ${pieceSquares.size} pieces (15% threshold)")
     
     return pieceSquares
 }
@@ -276,7 +286,7 @@ private fun detectBoardOrientation(
 }
 
 /**
- * Apply UCI mapping
+ * Apply UCI mapping with validation
  */
 private fun applyUciMapping(
     pieceTypes: Map<Pair<Int, Int>, String>,
@@ -289,10 +299,23 @@ private fun applyUciMapping(
     
     for ((location, pieceType) in pieceTypes) {
         val (row, col) = location
+        
+        // ✅ Validate row and col are within board bounds
+        if (row !in 0..7 || col !in 0..7) {
+            Log.w("ChessDetector", "⚠️ Invalid position: row=$row, col=$col")
+            continue
+        }
+        
         val fileChar = files[col]
         val rankChar = ranks[row]
         val uciSquare = "$fileChar$rankChar"
-        uciMapping[uciSquare] = pieceType
+        
+        // ✅ Double-check UCI is valid
+        if (isValidUciSquare(uciSquare)) {
+            uciMapping[uciSquare] = pieceType
+        } else {
+            Log.w("ChessDetector", "⚠️ Generated invalid UCI: $uciSquare")
+        }
     }
     
     return uciMapping
@@ -334,12 +357,11 @@ private fun getHardcodedUciCoordinates(whiteOnBottom: Boolean): Map<String, andr
 }
 
 // ===============================
-// MAIN ENTRY POINTS (ONLY 2 FUNCTIONS!)
+// MAIN ENTRY POINTS
 // ===============================
 
 /**
  * ✅ ONLY USED FOR FIRST DETECTION (orientation + corners + UCI coordinates)
- * Used by: MainActivity (first time), ScreenCaptureService (first capture)
  */
 fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context): BoardState? {
     Log.d("ChessDetector", "🔬 First detection (corner detection + orientation)...")
@@ -392,7 +414,12 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         }
     }
     
-    Log.d("ChessDetector", "✅ First detection: ${lightPieces.size}W, ${darkPieces.size}B")
+    // ✅ Filter valid UCI squares
+    val validWhite = filterValidUciSquares(lightPieces)
+    val validBlack = filterValidUciSquares(darkPieces)
+    val validAmbiguous = filterValidUciSquares(ambiguousPieces)
+    
+    Log.d("ChessDetector", "✅ First detection: ${validWhite.size}W, ${validBlack.size}B")
     
     // Create annotated image
     val annotated = boardWarped.clone()
@@ -420,9 +447,9 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     val uciCoordinates = getHardcodedUciCoordinates(whiteOnBottom)
     
     return BoardState(
-        white = lightPieces,
-        black = darkPieces,
-        ambiguous = ambiguousPieces,
+        white = validWhite,
+        black = validBlack,
+        ambiguous = validAmbiguous,
         annotatedBoard = annotatedBitmap,
         boardCorners = innerPts.toArray(),
         whiteOnBottom = whiteOnBottom,
@@ -432,10 +459,6 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
 
 /**
  * ✅ MAIN WORKHORSE - Used for ALL subsequent detections
- * Used by: MainActivity (after first), ScreenCaptureService (all captures)
- * 
- * Takes pre-cropped board bitmap, resizes to 800x800, detects pieces, classifies colors
- * 100% IDENTICAL processing for both in-app and live capture
  */
 fun getBoardStateFromBitmapDirectly(
     boardBitmap: Bitmap,
@@ -464,7 +487,7 @@ fun getBoardStateFromBitmapDirectly(
     // Detect pieces
     val pieceSquares = detectPieceSquares(boardWarped)
     
-    // Classify colors with TFLite (NO CACHING)
+    // Classify colors with TFLite
     val squareDataList = extractSquareBitmaps(boardWarped, pieceSquares)
     val classifier = PieceColorClassifier(context)
     val pieceTypes = classifyPieceColors(squareDataList, classifier)
@@ -485,7 +508,12 @@ fun getBoardStateFromBitmapDirectly(
         }
     }
     
-    Log.d("ChessDetector", "✅ Detection: ${lightPieces.size}W + ${darkPieces.size}B")
+    // ✅ Filter valid UCI squares
+    val validWhite = filterValidUciSquares(lightPieces)
+    val validBlack = filterValidUciSquares(darkPieces)
+    val validAmbiguous = filterValidUciSquares(ambiguousPieces)
+    
+    Log.d("ChessDetector", "✅ Detection: ${validWhite.size}W + ${validBlack.size}B")
     
     // Save debug image if requested
     if (saveDebugImage) {
@@ -495,17 +523,17 @@ fun getBoardStateFromBitmapDirectly(
             pieceTypes,
             context,
             debugImageCounter,
-            lightPieces.size,
-            darkPieces.size
+            validWhite.size,
+            validBlack.size
         )
     }
     
     boardWarped.release()
     
     return BoardState(
-        white = lightPieces,
-        black = darkPieces,
-        ambiguous = ambiguousPieces,
+        white = validWhite,
+        black = validBlack,
+        ambiguous = validAmbiguous,
         annotatedBoard = null,
         boardCorners = null,
         whiteOnBottom = whiteOnBottom,
