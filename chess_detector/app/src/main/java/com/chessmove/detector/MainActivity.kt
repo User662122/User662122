@@ -473,16 +473,16 @@ class MainActivity : AppCompatActivity() {
     private suspend fun displayResult(boardState: BoardState, isFirstDetection: Boolean) {
         val resultText = buildString {
             appendLine("♟️ UNIFIED CHESS DETECTOR ♟️")
-            appendLine("(${if (isFirstDetection) "FIRST" else "LIVE"} DETECTION - NO CACHING)")
+            appendLine("(${if (isFirstDetection) "FIRST" else "LIVE"} DETECTION - NEW 3-CLASS MODEL)")
             appendLine()
             if (isFirstDetection) {
                 appendLine("Orientation: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
                 appendLine()
             }
             appendLine("Detection Settings:")
-            appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
-            appendLine("  Method: Invert→Canny→Dilate→TFLite")
-            appendLine("  Caching: DISABLED (100% fresh detection)")
+            appendLine("  Model: 3-class (Black/White/Empty)")
+            appendLine("  Input Size: 96x96")
+            appendLine("  Method: Extract 64 squares → TFLite classify")
             appendLine()
             appendLine("--- DETECTED PIECES ---")
             appendLine()
@@ -492,9 +492,9 @@ class MainActivity : AppCompatActivity() {
             appendLine("✅ Black Pieces: ${boardState.black.size}")
             appendLine("Positions: ${boardState.black.sorted()}")
             appendLine()
-            if (boardState.ambiguous.isNotEmpty()) {
-                appendLine("⚠️ Ambiguous Pieces: ${boardState.ambiguous.size}")
-                appendLine("Positions: ${boardState.ambiguous.sorted()}")
+            if (boardState.empty.isNotEmpty()) {
+                appendLine("⬜ Empty Squares: ${boardState.empty.size}")
+                appendLine("Positions: ${boardState.empty.sorted()}")
                 appendLine()
             }
             appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
@@ -503,6 +503,7 @@ class MainActivity : AppCompatActivity() {
                 appendLine("📷 Annotated image displayed below")
                 appendLine("   White squares = White pieces")
                 appendLine("   Black squares = Black pieces")
+                appendLine("   Gray squares = Empty squares")
             } else {
                 appendLine("🎯 Using SAME method as live capture!")
                 appendLine("   (Notification counts = App counts)")
