@@ -302,108 +302,117 @@ class ScreenCaptureService : Service() {
         Log.d(TAG, "🔄 UNCONDITIONAL position mode - every capture sends to backend")
     }
 
-    private fun startContinuousCapture() {
-        isCapturing = true
-        captureCount = 0
-        debugImageCounter = 0
-        lastValidUci = null
-        previousValidUci = null
-        cachedOrientation = null
-        cachedUciCoordinates = null
-        consecutiveErrors = 0
-        gameStarted = false
-        appColor = null
-        firstMoveCalculated = false
-        
-        CoroutineScope(Dispatchers.IO).launch {
-            while (isCapturing && captureCount < MAX_CAPTURES) {
-                val executor = AutoTapExecutor.getInstance()
-                if (executor?.shouldPauseCapture() == true) {
-                    Log.d(TAG, "⏸️ Capture paused due to recent touch")
-                    updateNotification("Paused (touch detected)...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
-                    delay(CAPTURE_INTERVAL)
-                    continue
-                }
-                
-                if (isProcessing.get()) {
-                    Log.w(TAG, "⚠️ Still processing, skipping capture #${captureCount + 1}")
-                    delay(CAPTURE_INTERVAL)
-                    continue
-                }
-                
-                captureCount++
-                
-                Log.d(TAG, "📸 Capture #$captureCount (every 3 seconds, unconditional send)")
-                
-                updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
-                
-                captureAndProcessPartialWithJpeg()
-                
-                delay(CAPTURE_INTERVAL) // 3 seconds between captures
-            }
-            
-            if (captureCount >= MAX_CAPTURES) {
-                showToast("Stopped after $MAX_CAPTURES captures")
-            }
-            
-            stopSelf()
-        }
-    }
+// ✅ FIXED: Update notification AFTER processing completes
 
-    private fun captureAndProcessPartialWithJpeg() {
-        var fullBitmap: Bitmap? = null
-        var croppedBitmap: Bitmap? = null
-        var jpegBitmap: Bitmap? = null
-        
-        try {
-            isProcessing.set(true)
-            
-            Thread.sleep(200)
-            
-            val image = imageReader?.acquireLatestImage()
-            
-            if (image != null) {
-                fullBitmap = imageToBitmap(image)
-                image.close()
-                
-                croppedBitmap = Bitmap.createBitmap(
-                    fullBitmap,
-                    BOARD_CROP_X,
-                    BOARD_CROP_Y,
-                    BOARD_CROP_WIDTH,
-                    BOARD_CROP_HEIGHT
-                )
-                fullBitmap.recycle()
-                fullBitmap = null
-                
-                jpegBitmap = convertToJpegFormat(croppedBitmap)
-                croppedBitmap.recycle()
-                croppedBitmap = null
-                
-                val bitmapToProcess = jpegBitmap
-                jpegBitmap = null
-                
-                runBlocking {
-                    processPartialFrameAndExtractUci(bitmapToProcess, captureCount)
-                }
-                
-                bitmapToProcess.recycle()
-                Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
-                
-            } else {
-                Log.w(TAG, "⚠️ No image available on capture #$captureCount")
+private fun startContinuousCapture() {
+    isCapturing = true
+    captureCount = 0
+    debugImageCounter = 0
+    lastValidUci = null
+    previousValidUci = null
+    cachedOrientation = null
+    cachedUciCoordinates = null
+    consecutiveErrors = 0
+    gameStarted = false
+    appColor = null
+    firstMoveCalculated = false
+    
+    CoroutineScope(Dispatchers.IO).launch {
+        while (isCapturing && captureCount < MAX_CAPTURES) {
+            val executor = AutoTapExecutor.getInstance()
+            if (executor?.shouldPauseCapture() == true) {
+                Log.d(TAG, "⏸️ Capture paused due to recent touch")
+                updateNotification("Paused (touch detected)...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+                delay(CAPTURE_INTERVAL)
+                continue
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error capturing/processing frame #$captureCount", e)
-            consecutiveErrors++
             
-            fullBitmap?.recycle()
-            croppedBitmap?.recycle()
-            jpegBitmap?.recycle()
-        } finally {
-            isProcessing.set(false)
+            if (isProcessing.get()) {
+                Log.w(TAG, "⚠️ Still processing, skipping capture #${captureCount + 1}")
+                delay(CAPTURE_INTERVAL)
+                continue
+            }
+            
+            captureCount++
+            
+            Log.d(TAG, "📸 Capture #$captureCount (every 3 seconds, unconditional send)")
+            
+            // ❌ REMOVED: Don't update notification here with OLD data
+            // updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+            
+            // ✅ Process and update notification AFTER
+            captureAndProcessPartialWithJpeg()
+            
+            // ✅ NEW: Update notification AFTER processing completes with FRESH data
+            updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+            
+            delay(CAPTURE_INTERVAL) // 3 seconds between captures
         }
+        
+        if (captureCount >= MAX_CAPTURES) {
+            showToast("Stopped after $MAX_CAPTURES captures")
+        }
+        
+        stopSelf()
     }
+}
+
+private fun captureAndProcessPartialWithJpeg() {
+    var fullBitmap: Bitmap? = null
+    var croppedBitmap: Bitmap? = null
+    var jpegBitmap: Bitmap? = null
+    
+    try {
+        isProcessing.set(true)
+        
+        Thread.sleep(200)
+        
+        val image = imageReader?.acquireLatestImage()
+        
+        if (image != null) {
+            fullBitmap = imageToBitmap(image)
+            image.close()
+            
+            croppedBitmap = Bitmap.createBitmap(
+                fullBitmap,
+                BOARD_CROP_X,
+                BOARD_CROP_Y,
+                BOARD_CROP_WIDTH,
+                BOARD_CROP_HEIGHT
+            )
+            fullBitmap.recycle()
+            fullBitmap = null
+            
+            jpegBitmap = convertToJpegFormat(croppedBitmap)
+            croppedBitmap.recycle()
+            croppedBitmap = null
+            
+            val bitmapToProcess = jpegBitmap
+            jpegBitmap = null
+            
+            // ✅ This updates lastValidUci with fresh TFLite data
+            runBlocking {
+                processPartialFrameAndExtractUci(bitmapToProcess, captureCount)
+            }
+            
+            bitmapToProcess.recycle()
+            Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
+            
+        } else {
+            Log.w(TAG, "⚠️ No image available on capture #$captureCount")
+        }
+    } catch (e: Exception) {
+        Log.e(TAG, "❌ Error capturing/processing frame #$captureCount", e)
+        consecutiveErrors++
+        
+        fullBitmap?.recycle()
+        croppedBitmap?.recycle()
+        jpegBitmap?.recycle()
+    } finally {
+        isProcessing.set(false)
+        // ✅ Notification will be updated AFTER this returns
+    }
+}
 
     private fun convertToJpegFormat(rawBitmap: Bitmap): Bitmap {
         val outputStream = ByteArrayOutputStream()
