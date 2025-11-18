@@ -30,9 +30,9 @@ class PieceColorClassifier(context: Context) {
         
         // Class indices (should match your training dataset class order)
         // Typically: alphabetical order -> [Black=0, Empty=1, White=2]
-        private const val CLASS_BLACK = 0
-        private const val CLASS_EMPTY = 1
-        private const val CLASS_WHITE = 2
+private const val CLASS_BLACK = 0
+private const val CLASS_WHITE = 1  
+private const val CLASS_EMPTY = 2
         
         // Confidence threshold for empty detection
         private const val EMPTY_THRESHOLD = 0.5f
