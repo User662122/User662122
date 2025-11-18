@@ -37,6 +37,10 @@ class MainActivity : AppCompatActivity() {
     private var showUrlDialog = false
     private lateinit var backendClient: BackendClient
     
+    // ✅ Cache orientation after first detection (like ScreenCaptureService)
+    private var cachedOrientation: Boolean? = null
+    private var firstDetectionDone = false
+    
     companion object {
         private const val TAG = "ChessDetector"
     }
@@ -69,7 +73,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // ✅ NEW: Storage permission launcher
     private val requestStoragePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -79,7 +82,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Storage permissions granted", Toast.LENGTH_SHORT).show()
         } else {
             Log.w(TAG, "⚠️ Some storage permissions denied")
-            // For Android 11+, might need MANAGE_EXTERNAL_STORAGE
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (!Environment.isExternalStorageManager()) {
                     showManageStoragePermissionDialog()
@@ -143,9 +145,7 @@ class MainActivity : AppCompatActivity() {
             detectPieces()
         }
         
-        // ✅ NEW: Request storage permissions on startup
         requestStoragePermissions()
-        
         checkNotificationPermissionAndStart()
         
         autoStartCapture = intent.getBooleanExtra("auto_start_capture", false)
@@ -167,12 +167,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    /**
-     * ✅ NEW: Request storage permissions for debug images
-     */
     private fun requestStoragePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ - Request READ_MEDIA_IMAGES
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) 
                 != PackageManager.PERMISSION_GRANTED) {
                 requestStoragePermissionLauncher.launch(
@@ -180,12 +176,10 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11-12 - Need MANAGE_EXTERNAL_STORAGE for full access
             if (!Environment.isExternalStorageManager()) {
                 showManageStoragePermissionDialog()
             }
         } else {
-            // Android 10 and below
             val permissions = mutableListOf<String>()
             
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -204,9 +198,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    /**
-     * ✅ NEW: Show dialog for MANAGE_EXTERNAL_STORAGE permission (Android 11+)
-     */
     private fun showManageStoragePermissionDialog() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             AlertDialog.Builder(this)
@@ -395,6 +386,10 @@ class MainActivity : AppCompatActivity() {
             binding.placeholderResult.visibility = View.VISIBLE
             binding.resultText.text = getString(R.string.result_title)
             
+            // ✅ Reset orientation cache when new image loaded
+            cachedOrientation = null
+            firstDetectionDone = false
+            
             Toast.makeText(this, "Image loaded successfully", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e(TAG, "Error loading image", e)
@@ -402,6 +397,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    /**
+     * ✅ UNIFIED DETECTION - Same method as ScreenCaptureService!
+     * Uses getBoardStateFromBitmapDirectly() for consistent results
+     */
     private fun detectPieces() {
         val img = inputBitmap
         
@@ -415,52 +414,45 @@ class MainActivity : AppCompatActivity() {
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val boardState = getBoardStateFromBitmap(img, "Chess Board", this@MainActivity)
-                
-                if (boardState != null) {
-                    val resultText = buildString {
-                        appendLine("♟️ IMPROVED CHESS DETECTOR ♟️")
-                        appendLine("(Python-based OpenCV + TFLite)")
-                        appendLine()
-                        appendLine("Detection Settings:")
-                        appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
-                        appendLine("  Method: Invert→Adaptive→Canny→Dilate")
-                        appendLine()
-                        appendLine("--- DETECTED PIECES ---")
-                        appendLine()
-                        appendLine("✅ White Pieces: ${boardState.white.size}")
-                        appendLine("Positions: ${boardState.white.sorted()}")
-                        appendLine()
-                        appendLine("✅ Black Pieces: ${boardState.black.size}")
-                        appendLine("Positions: ${boardState.black.sorted()}")
-                        appendLine()
-                        if (boardState.ambiguous.isNotEmpty()) {
-                            appendLine("⚠️ Ambiguous Pieces: ${boardState.ambiguous.size}")
-                            appendLine("Positions: ${boardState.ambiguous.sorted()}")
-                            appendLine()
-                        }
-                        appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
-                        appendLine()
-                        appendLine("📷 Annotated image displayed below")
-                        appendLine("   White squares = White pieces")
-                        appendLine("   Black squares = Black pieces")
-                    }
+                // ✅ FIRST DETECTION: Get orientation (like ScreenCaptureService does)
+                if (!firstDetectionDone) {
+                    Log.d(TAG, "🔍 First detection - getting orientation...")
+                    val initialState = getBoardStateFromBitmap(img, "Chess Board", this@MainActivity)
                     
-                    withContext(Dispatchers.Main) {
-                        binding.resultText.text = resultText
+                    if (initialState != null) {
+                        cachedOrientation = initialState.whiteOnBottom
+                        firstDetectionDone = true
                         
-                        boardState.annotatedBoard?.let { annotatedBitmap ->
-                            binding.resultImageView.setImageBitmap(annotatedBitmap)
-                            binding.placeholderResult.visibility = View.GONE
+                        Log.d(TAG, "✅ Orientation cached: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
+                        
+                        // Display first detection result
+                        displayResult(initialState, true)
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            binding.resultText.text = "❌ Failed to process board.\nPlease ensure the image contains a clear chessboard."
+                            binding.detectButton.isEnabled = true
                         }
-                        
-                        binding.detectButton.isEnabled = true
-                        Toast.makeText(this@MainActivity, "Detection complete!", Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    withContext(Dispatchers.Main) {
-                        binding.resultText.text = "❌ Failed to process board.\nPlease ensure the image contains a clear chessboard."
-                        binding.detectButton.isEnabled = true
+                    // ✅ SUBSEQUENT DETECTIONS: Use same method as ScreenCaptureService!
+                    Log.d(TAG, "🚀 Using UNIFIED detection (same as live capture)...")
+                    
+                    val boardState = getBoardStateFromBitmapDirectly(
+                        img,
+                        "Chess Board",
+                        cachedOrientation!!,
+                        this@MainActivity,
+                        saveDebugImage = false,
+                        debugImageCounter = 0
+                    )
+                    
+                    if (boardState != null) {
+                        displayResult(boardState, false)
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            binding.resultText.text = "❌ Detection failed"
+                            binding.detectButton.isEnabled = true
+                        }
                     }
                 }
                 
@@ -472,6 +464,64 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "Detection failed", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+    
+    /**
+     * Display detection results
+     */
+    private suspend fun displayResult(boardState: BoardState, isFirstDetection: Boolean) {
+        val resultText = buildString {
+            appendLine("♟️ UNIFIED CHESS DETECTOR ♟️")
+            appendLine("(${if (isFirstDetection) "FIRST" else "LIVE"} DETECTION - NO CACHING)")
+            appendLine()
+            if (isFirstDetection) {
+                appendLine("Orientation: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
+                appendLine()
+            }
+            appendLine("Detection Settings:")
+            appendLine("  Piece Threshold: $PIECE_THRESHOLD%")
+            appendLine("  Method: Invert→Canny→Dilate→TFLite")
+            appendLine("  Caching: DISABLED (100% fresh detection)")
+            appendLine()
+            appendLine("--- DETECTED PIECES ---")
+            appendLine()
+            appendLine("✅ White Pieces: ${boardState.white.size}")
+            appendLine("Positions: ${boardState.white.sorted()}")
+            appendLine()
+            appendLine("✅ Black Pieces: ${boardState.black.size}")
+            appendLine("Positions: ${boardState.black.sorted()}")
+            appendLine()
+            if (boardState.ambiguous.isNotEmpty()) {
+                appendLine("⚠️ Ambiguous Pieces: ${boardState.ambiguous.size}")
+                appendLine("Positions: ${boardState.ambiguous.sorted()}")
+                appendLine()
+            }
+            appendLine("Total Pieces: ${boardState.white.size + boardState.black.size}")
+            appendLine()
+            if (isFirstDetection) {
+                appendLine("📷 Annotated image displayed below")
+                appendLine("   White squares = White pieces")
+                appendLine("   Black squares = Black pieces")
+            } else {
+                appendLine("🎯 Using SAME method as live capture!")
+                appendLine("   (Notification counts = App counts)")
+            }
+        }
+        
+        withContext(Dispatchers.Main) {
+            binding.resultText.text = resultText
+            
+            // Only show annotated image on first detection
+            if (isFirstDetection) {
+                boardState.annotatedBoard?.let { annotatedBitmap ->
+                    binding.resultImageView.setImageBitmap(annotatedBitmap)
+                    binding.placeholderResult.visibility = View.GONE
+                }
+            }
+            
+            binding.detectButton.isEnabled = true
+            Toast.makeText(this@MainActivity, "Detection complete!", Toast.LENGTH_SHORT).show()
         }
     }
 }
