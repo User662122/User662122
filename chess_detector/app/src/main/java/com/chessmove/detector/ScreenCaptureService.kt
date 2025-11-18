@@ -51,10 +51,10 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
     
-    private val BOARD_CROP_X = 42
-    private val BOARD_CROP_Y = 458
-    private val BOARD_CROP_WIDTH = 675 - 42
-    private val BOARD_CROP_HEIGHT = 1088 - 458
+    private val BOARD_CROP_X = 45
+    private val BOARD_CROP_Y = 461
+    private val BOARD_CROP_WIDTH = 675 - 45
+    private val BOARD_CROP_HEIGHT = 1088 - 461
     
     private var lastValidUci: UciSnapshot? = null
     private var previousValidUci: UciSnapshot? = null
