@@ -76,7 +76,6 @@ class ScreenCaptureService : Service() {
     private lateinit var backendClient: BackendClient
     private var gameStarted = false
     private var appColor: String? = null
-    private var firstMoveCalculated = false // Track if we've sent initial move
     
     private var debugImageCounter = 0
     private var enableDebugImages = true
@@ -86,7 +85,7 @@ class ScreenCaptureService : Service() {
         const val CHANNEL_ID = "ScreenCaptureChannel"
         const val TAG = "ScreenCaptureService"
         const val MAX_CAPTURES = 1000
-        const val CAPTURE_INTERVAL = 3000L // Changed to 3 seconds
+        const val CAPTURE_INTERVAL = 3000L
         const val PROCESSING_TIMEOUT = 5000L
         const val JPEG_QUALITY = 100
     }
@@ -107,9 +106,9 @@ class ScreenCaptureService : Service() {
         
         clearOldDebugImages()
         
-        Log.d(TAG, "✅ Service created - UNCONDITIONAL position sending mode")
+        Log.d(TAG, "✅ Service created - sending positions from start")
         Log.d(TAG, "   Capture interval: ${CAPTURE_INTERVAL}ms (3 seconds)")
-        Log.d(TAG, "   Strategy: Send first UCI move, then positions every capture")
+        Log.d(TAG, "   Strategy: Send positions immediately after orientation detection")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -155,7 +154,7 @@ class ScreenCaptureService : Service() {
                             updateNotification("Starting in $i seconds...", 0, 0)
                             delay(1000)
                         }
-                        Log.d(TAG, "🎬 Starting UNCONDITIONAL position capture every 3s!")
+                        Log.d(TAG, "🎬 Starting position capture every 3s!")
                         startContinuousCapture()
                     }
                 } catch (e: Exception) {
@@ -233,8 +232,7 @@ class ScreenCaptureService : Service() {
                 " | W:${lastValidUci!!.whitePieces.size} B:${lastValidUci!!.blackPieces.size}"
             } else ""
             val debugStatus = if (enableDebugImages) " | 📸" else ""
-            val modeStatus = if (firstMoveCalculated) " | POS" else " | UCI"
-            "$text (#$count$gameStatus$uciInfo$debugStatus$modeStatus)"
+            "$text (#$count$gameStatus$uciInfo$debugStatus | POS)"
         } else text
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -299,120 +297,110 @@ class ScreenCaptureService : Service() {
     }
 
     private fun startImageProcessor() {
-        Log.d(TAG, "🔄 UNCONDITIONAL position mode - every capture sends to backend")
+        Log.d(TAG, "🔄 Position mode - every capture sends to backend")
     }
 
-// ✅ FIXED: Update notification AFTER processing completes
-
-private fun startContinuousCapture() {
-    isCapturing = true
-    captureCount = 0
-    debugImageCounter = 0
-    lastValidUci = null
-    previousValidUci = null
-    cachedOrientation = null
-    cachedUciCoordinates = null
-    consecutiveErrors = 0
-    gameStarted = false
-    appColor = null
-    firstMoveCalculated = false
-    
-    CoroutineScope(Dispatchers.IO).launch {
-        while (isCapturing && captureCount < MAX_CAPTURES) {
-            val executor = AutoTapExecutor.getInstance()
-            if (executor?.shouldPauseCapture() == true) {
-                Log.d(TAG, "⏸️ Capture paused due to recent touch")
-                updateNotification("Paused (touch detected)...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+    private fun startContinuousCapture() {
+        isCapturing = true
+        captureCount = 0
+        debugImageCounter = 0
+        lastValidUci = null
+        previousValidUci = null
+        cachedOrientation = null
+        cachedUciCoordinates = null
+        consecutiveErrors = 0
+        gameStarted = false
+        appColor = null
+        
+        CoroutineScope(Dispatchers.IO).launch {
+            while (isCapturing && captureCount < MAX_CAPTURES) {
+                val executor = AutoTapExecutor.getInstance()
+                if (executor?.shouldPauseCapture() == true) {
+                    Log.d(TAG, "⏸️ Capture paused due to recent touch")
+                    updateNotification("Paused (touch detected)...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+                    delay(CAPTURE_INTERVAL)
+                    continue
+                }
+                
+                if (isProcessing.get()) {
+                    Log.w(TAG, "⚠️ Still processing, skipping capture #${captureCount + 1}")
+                    delay(CAPTURE_INTERVAL)
+                    continue
+                }
+                
+                captureCount++
+                
+                Log.d(TAG, "📸 Capture #$captureCount (every 3 seconds, position mode)")
+                
+                captureAndProcessPartialWithJpeg()
+                
+                updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
+                
                 delay(CAPTURE_INTERVAL)
-                continue
             }
             
-            if (isProcessing.get()) {
-                Log.w(TAG, "⚠️ Still processing, skipping capture #${captureCount + 1}")
-                delay(CAPTURE_INTERVAL)
-                continue
+            if (captureCount >= MAX_CAPTURES) {
+                showToast("Stopped after $MAX_CAPTURES captures")
             }
             
-            captureCount++
-            
-            Log.d(TAG, "📸 Capture #$captureCount (every 3 seconds, unconditional send)")
-            
-            // ❌ REMOVED: Don't update notification here with OLD data
-            // updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
-            
-            // ✅ Process and update notification AFTER
-            captureAndProcessPartialWithJpeg()
-            
-            // ✅ NEW: Update notification AFTER processing completes with FRESH data
-            updateNotification("Monitoring...", captureCount, lastValidUci?.totalPieceCount() ?: 0)
-            
-            delay(CAPTURE_INTERVAL) // 3 seconds between captures
+            stopSelf()
         }
-        
-        if (captureCount >= MAX_CAPTURES) {
-            showToast("Stopped after $MAX_CAPTURES captures")
-        }
-        
-        stopSelf()
     }
-}
 
-private fun captureAndProcessPartialWithJpeg() {
-    var fullBitmap: Bitmap? = null
-    var croppedBitmap: Bitmap? = null
-    var jpegBitmap: Bitmap? = null
-    
-    try {
-        isProcessing.set(true)
+    private fun captureAndProcessPartialWithJpeg() {
+        var fullBitmap: Bitmap? = null
+        var croppedBitmap: Bitmap? = null
+        var jpegBitmap: Bitmap? = null
         
-        Thread.sleep(200)
-        
-        val image = imageReader?.acquireLatestImage()
-        
-        if (image != null) {
-            fullBitmap = imageToBitmap(image)
-            image.close()
+        try {
+            isProcessing.set(true)
             
-            croppedBitmap = Bitmap.createBitmap(
-                fullBitmap,
-                BOARD_CROP_X,
-                BOARD_CROP_Y,
-                BOARD_CROP_WIDTH,
-                BOARD_CROP_HEIGHT
-            )
-            fullBitmap.recycle()
-            fullBitmap = null
+            Thread.sleep(200)
             
-            jpegBitmap = convertToJpegFormat(croppedBitmap)
-            croppedBitmap.recycle()
-            croppedBitmap = null
+            val image = imageReader?.acquireLatestImage()
             
-            val bitmapToProcess = jpegBitmap
-            jpegBitmap = null
-            
-            // ✅ This updates lastValidUci with fresh TFLite data
-            runBlocking {
-                processPartialFrameAndExtractUci(bitmapToProcess, captureCount)
+            if (image != null) {
+                fullBitmap = imageToBitmap(image)
+                image.close()
+                
+                croppedBitmap = Bitmap.createBitmap(
+                    fullBitmap,
+                    BOARD_CROP_X,
+                    BOARD_CROP_Y,
+                    BOARD_CROP_WIDTH,
+                    BOARD_CROP_HEIGHT
+                )
+                fullBitmap.recycle()
+                fullBitmap = null
+                
+                jpegBitmap = convertToJpegFormat(croppedBitmap)
+                croppedBitmap.recycle()
+                croppedBitmap = null
+                
+                val bitmapToProcess = jpegBitmap
+                jpegBitmap = null
+                
+                runBlocking {
+                    processPartialFrameAndExtractUci(bitmapToProcess, captureCount)
+                }
+                
+                bitmapToProcess.recycle()
+                Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
+                
+            } else {
+                Log.w(TAG, "⚠️ No image available on capture #$captureCount")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error capturing/processing frame #$captureCount", e)
+            consecutiveErrors++
             
-            bitmapToProcess.recycle()
-            Log.d(TAG, "🗑️ Frame #$captureCount cleanup complete")
-            
-        } else {
-            Log.w(TAG, "⚠️ No image available on capture #$captureCount")
+            fullBitmap?.recycle()
+            croppedBitmap?.recycle()
+            jpegBitmap?.recycle()
+        } finally {
+            isProcessing.set(false)
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "❌ Error capturing/processing frame #$captureCount", e)
-        consecutiveErrors++
-        
-        fullBitmap?.recycle()
-        croppedBitmap?.recycle()
-        jpegBitmap?.recycle()
-    } finally {
-        isProcessing.set(false)
-        // ✅ Notification will be updated AFTER this returns
     }
-}
 
     private fun convertToJpegFormat(rawBitmap: Bitmap): Bitmap {
         val outputStream = ByteArrayOutputStream()
@@ -457,9 +445,10 @@ private fun captureAndProcessPartialWithJpeg() {
                     
                     Log.d(TAG, "✅ Orientation: ${if (cachedOrientation == true) "White" else "Black"} on bottom")
                     
+                    // Start game with backend
                     if (!gameStarted && backendClient.hasBackendUrl()) {
                         val bottomColor = if (cachedOrientation == true) "white" else "black"
-                        startGameWithBackend(bottomColor, initialState)
+                        startGameWithBackend(bottomColor)
                     }
                     
                     withContext(Dispatchers.Main) {
@@ -477,6 +466,12 @@ private fun captureAndProcessPartialWithJpeg() {
                         timestamp = System.currentTimeMillis()
                     )
                     
+                    // ✅ Send initial position immediately
+                    if (gameStarted) {
+                        Log.d(TAG, "📤 Sending initial position...")
+                        sendPositionsToBackend(lastValidUci!!)
+                    }
+                    
                     if (enableDebugImages) {
                         debugImageCounter++
                     }
@@ -485,7 +480,7 @@ private fun captureAndProcessPartialWithJpeg() {
                 return
             }
             
-            // Subsequent captures: detect and ALWAYS send positions to backend
+            // Subsequent captures: detect and send positions
             val currentBoardState = getBoardStateFromBitmapDirectly(
                 boardBitmap,
                 "Frame #$frameNumber",
@@ -519,9 +514,9 @@ private fun captureAndProcessPartialWithJpeg() {
                 
                 consecutiveErrors = 0
                 
-                // ✅ UNCONDITIONALLY send positions to backend every capture
-                if (gameStarted && firstMoveCalculated) {
-                    Log.d(TAG, "📤 Sending positions unconditionally...")
+                // ✅ Send positions to backend every capture
+                if (gameStarted) {
+                    Log.d(TAG, "📤 Sending positions...")
                     sendPositionsToBackend(currentUci)
                 }
                 
@@ -543,7 +538,7 @@ private fun captureAndProcessPartialWithJpeg() {
         }
     }
 
-    private fun startGameWithBackend(bottomColor: String, initialState: BoardState) {
+    private fun startGameWithBackend(bottomColor: String) {
         processingScope.launch {
             try {
                 appColor = bottomColor
@@ -553,22 +548,13 @@ private fun captureAndProcessPartialWithJpeg() {
                 
                 result.onSuccess { response ->
                     gameStarted = true
+                    Log.d(TAG, "✅ Game started! Backend response: $response")
                     
-                    // If we're white, backend returns first move
-                    if (appColor == "white") {
-                        if (response.isNotEmpty() && response != "Invalid" && response != "Game Over") {
-                            Log.d(TAG, "✅ Backend's first move: $response")
-                            executeBackendMove(response)
-                            firstMoveCalculated = true
-                        }
-                    } else {
-                        // If we're black, just wait for enemy to move first
-                        // We'll start sending positions after detecting their move
-                        Log.d(TAG, "⏳ Waiting for enemy's first move...")
-                        firstMoveCalculated = true // Set to true so we start sending positions
-                        withContext(Dispatchers.Main) {
-                            showToast("Waiting for opponent's first move...")
-                        }
+                    // ✅ REMOVED: No longer execute first move
+                    // We'll just send positions and let backend respond
+                    
+                    withContext(Dispatchers.Main) {
+                        showToast("Game started as $bottomColor")
                     }
                 }.onFailure { e ->
                     Log.e(TAG, "❌ Failed to start game: ${e.message}")
@@ -580,54 +566,6 @@ private fun captureAndProcessPartialWithJpeg() {
                 Log.e(TAG, "❌ Error starting game", e)
             }
         }
-    }
-
-    /**
-     * Calculate the first move from initial board position
-     * For simplicity, we'll just detect any standard opening move
-     */
-    private fun calculateFirstMove(boardState: BoardState): String? {
-        // Standard starting position has 16 pieces per side
-        if (boardState.white.size != 16 || boardState.black.size != 16) {
-            Log.w(TAG, "⚠️ Not standard starting position")
-            return null
-        }
-        
-        // For black's first move, common openings
-        // In standard position after white's move, we'd detect what changed
-        // For now, return a standard response like e7e5 (King's Pawn)
-        
-        // Check if this is truly starting position (all pieces in initial squares)
-        val whiteStandard = setOf("a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1",
-                                   "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2")
-        val blackStandard = setOf("a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
-                                   "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7")
-        
-        if (boardState.white == whiteStandard && boardState.black == blackStandard) {
-            // Pure starting position - shouldn't happen if we're black
-            Log.w(TAG, "⚠️ Pure starting position detected")
-            return null
-        }
-        
-        // Try to detect white's move by comparing to standard
-        val whiteMoved = whiteStandard - boardState.white
-        val whiteNew = boardState.white - whiteStandard
-        
-        if (whiteMoved.size == 1 && whiteNew.size == 1) {
-            val from = whiteMoved.first()
-            val to = whiteNew.first()
-            Log.d(TAG, "🎯 Detected white's move: $from$to")
-            
-            // Respond with e7e5 as standard response to e2e4
-            if (from == "e2" && to == "e4") {
-                return "e7e5"
-            }
-            
-            // Otherwise return a standard opening move
-            return "e7e5" // King's Pawn Opening
-        }
-        
-        return null
     }
 
     private suspend fun sendPositionsToBackend(uciSnapshot: UciSnapshot) {
