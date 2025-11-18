@@ -286,7 +286,7 @@ private fun detectBoardOrientation(
 }
 
 /**
- * Apply UCI mapping with validation
+ * Apply UCI mapping
  */
 private fun applyUciMapping(
     pieceTypes: Map<Pair<Int, Int>, String>,
@@ -299,23 +299,10 @@ private fun applyUciMapping(
     
     for ((location, pieceType) in pieceTypes) {
         val (row, col) = location
-        
-        // ✅ Validate row and col are within board bounds
-        if (row !in 0..7 || col !in 0..7) {
-            Log.w("ChessDetector", "⚠️ Invalid position: row=$row, col=$col")
-            continue
-        }
-        
         val fileChar = files[col]
         val rankChar = ranks[row]
         val uciSquare = "$fileChar$rankChar"
-        
-        // ✅ Double-check UCI is valid
-        if (isValidUciSquare(uciSquare)) {
-            uciMapping[uciSquare] = pieceType
-        } else {
-            Log.w("ChessDetector", "⚠️ Generated invalid UCI: $uciSquare")
-        }
+        uciMapping[uciSquare] = pieceType
     }
     
     return uciMapping
@@ -414,12 +401,7 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
         }
     }
     
-    // ✅ Filter valid UCI squares
-    val validWhite = filterValidUciSquares(lightPieces)
-    val validBlack = filterValidUciSquares(darkPieces)
-    val validAmbiguous = filterValidUciSquares(ambiguousPieces)
-    
-    Log.d("ChessDetector", "✅ First detection: ${validWhite.size}W, ${validBlack.size}B")
+    Log.d("ChessDetector", "✅ First detection: ${lightPieces.size}W, ${darkPieces.size}B")
     
     // Create annotated image
     val annotated = boardWarped.clone()
@@ -447,9 +429,9 @@ fun getBoardStateFromBitmap(bitmap: Bitmap, boardName: String, context: Context)
     val uciCoordinates = getHardcodedUciCoordinates(whiteOnBottom)
     
     return BoardState(
-        white = validWhite,
-        black = validBlack,
-        ambiguous = validAmbiguous,
+        white = lightPieces,
+        black = darkPieces,
+        ambiguous = ambiguousPieces,
         annotatedBoard = annotatedBitmap,
         boardCorners = innerPts.toArray(),
         whiteOnBottom = whiteOnBottom,
@@ -508,12 +490,7 @@ fun getBoardStateFromBitmapDirectly(
         }
     }
     
-    // ✅ Filter valid UCI squares
-    val validWhite = filterValidUciSquares(lightPieces)
-    val validBlack = filterValidUciSquares(darkPieces)
-    val validAmbiguous = filterValidUciSquares(ambiguousPieces)
-    
-    Log.d("ChessDetector", "✅ Detection: ${validWhite.size}W + ${validBlack.size}B")
+    Log.d("ChessDetector", "✅ Detection: ${lightPieces.size}W + ${darkPieces.size}B")
     
     // Save debug image if requested
     if (saveDebugImage) {
@@ -523,17 +500,17 @@ fun getBoardStateFromBitmapDirectly(
             pieceTypes,
             context,
             debugImageCounter,
-            validWhite.size,
-            validBlack.size
+            lightPieces.size,
+            darkPieces.size
         )
     }
     
     boardWarped.release()
     
     return BoardState(
-        white = validWhite,
-        black = validBlack,
-        ambiguous = validAmbiguous,
+        white = lightPieces,
+        black = darkPieces,
+        ambiguous = ambiguousPieces,
         annotatedBoard = null,
         boardCorners = null,
         whiteOnBottom = whiteOnBottom,
