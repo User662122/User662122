@@ -1,7 +1,7 @@
 name: WebRTC Recorder (Windows)
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
 
 jobs:
   record:
@@ -9,40 +9,29 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # 1️⃣ Repo checkout
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node.js
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      # 3️⃣ Install FFmpeg using Chocolatey
       - name: Install FFmpeg
         run: |
           choco install ffmpeg -y --no-progress
-          # Add FFmpeg to PATH
           echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
 
-      # 4️⃣ Install node-pre-gyp globally (fix wrtc issue)
-      - name: Install node-pre-gyp globally
+      - name: Install node-pre-gyp
         run: npm install -g node-pre-gyp
 
-      # 5️⃣ Install dependencies
-      - name: Install npm dependencies
+      - name: Install dependencies
         run: npm install
 
-      # 6️⃣ Check FFmpeg availability
       - name: Verify FFmpeg
         run: ffmpeg -version
 
-      # 7️⃣ Start WebRTC recorder
       - name: Run recorder
         run: node record.js
 
-      # 8️⃣ Upload recording artifact
       - name: Upload recording
         if: always()
         uses: actions/upload-artifact@v4
