@@ -1,122 +1,90 @@
-const wrtc = require("wrtc");
-const WebSocket = require("ws");
-const { spawn } = require("child_process");
+name: WebRTC Recorder (Windows)
 
-const SIGNALING_URL = "wss://dayton-beer-consent-playing.trycloudflare.com";
+on:
+  workflow_dispatch:
 
-const ws = new WebSocket(SIGNALING_URL);
+jobs:
+  record:
+    runs-on: windows-latest
+    timeout-minutes: 30
 
-let pc;
-let ffmpeg;
-let started = false;
-let finalized = false;
+    steps:
+      # 1️⃣ Checkout repo
+      - uses: actions/checkout@v4
 
-function finalize(reason) {
-  if (finalized) return;
-  finalized = true;
-  console.log("Finalizing because:", reason);
+      # 2️⃣ Cache FFmpeg
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: C:\ProgramData\chocolatey\bin
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('**/.github/workflows/*.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-ffmpeg-
 
-  if (ffmpeg) {
-    try {
-      // Close stdin so FFmpeg knows no more data is coming
-      ffmpeg.stdin.end();
+      # 3️⃣ Install FFmpeg if not cached
+      - name: Install FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: choco install ffmpeg -y --no-progress
 
-      // Wait for FFmpeg to exit gracefully
-      ffmpeg.on("exit", (code, signal) => {
-        console.log(`FFmpeg exited with code ${code}, signal ${signal}`);
-      });
+      # 4️⃣ Add FFmpeg to PATH
+      - name: Add FFmpeg to PATH
+        run: echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
 
-      // Optional: force kill after timeout if it hangs
-      setTimeout(() => {
-        if (!ffmpeg.killed) {
-          console.log("FFmpeg taking too long, killing...");
-          ffmpeg.kill("SIGKILL");
-        }
-      }, 10000); // 10 seconds max wait
-    } catch (err) {
-      console.error("Error finalizing FFmpeg:", err);
-    }
-  }
-}
+      # 5️⃣ Setup Node.js 18
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
 
-ws.on("open", () => {
-  pc = new wrtc.RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
+      # 6️⃣ Cache global npm packages
+      - name: Cache global npm packages
+        id: cache-global-npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.APPDATA }}\npm
+            ${{ env.APPDATA }}\npm-cache
+          key: ${{ runner.os }}-global-npm-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-global-npm-
 
-  pc.ontrack = (event) => {
-    if (event.track.kind !== "video") return;
+      # 7️⃣ Install node-pre-gyp if cache miss
+      - name: Install node-pre-gyp
+        if: steps.cache-global-npm.outputs.cache-hit != 'true'
+        run: npm install -g node-pre-gyp
 
-    const sink = new wrtc.nonstandard.RTCVideoSink(event.track);
+      # 8️⃣ Cache local npm dependencies
+      - name: Cache npm dependencies
+        id: cache-npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            **/package-lock.json
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
-    sink.onframe = ({ frame }) => {
-      const width = frame.width;
-      const height = frame.height;
+      # 9️⃣ Install local npm dependencies if cache miss
+      - name: Install npm dependencies
+        if: steps.cache-npm.outputs.cache-hit != 'true'
+        run: |
+          npm ci --no-audit --prefer-offline || npm install
+          npm install jpeg-js --no-save
 
-      if (!started) {
-        started = true;
+      # 🔟 Verify FFmpeg
+      - name: Verify FFmpeg
+        run: ffmpeg -version
 
-        console.log(`Starting ffmpeg ${width}x${height}`);
+      # 1️⃣1️⃣ Run recorder
+      - name: Run recorder
+        run: node record.js
 
-        ffmpeg = spawn("ffmpeg", [
-          "-y",
-          "-f", "rawvideo",
-          "-pix_fmt", "yuv420p",
-          "-s", `${width}x${height}`,
-          "-r", "30",
-          "-i", "-",
-          "-c:v", "libx264",
-          "-preset", "veryfast",
-          "-pix_fmt", "yuv420p",
-          "-movflags", "+faststart",
-          "recording.mp4"
-        ]);
-
-        ffmpeg.stderr.on("data", d =>
-          console.log("[ffmpeg]", d.toString())
-        );
-      }
-
-      if (!finalized && ffmpeg) {
-        ffmpeg.stdin.write(Buffer.from(frame.data));
-      }
-    };
-
-    event.track.onended = () => {
-      console.log("Track ended");
-      finalize("track ended");
-      sink.stop();
-    };
-  };
-});
-
-ws.on("message", async (msg) => {
-  const data = JSON.parse(msg);
-
-  if (data.type === "offer") {
-    await pc.setRemoteDescription({
-      type: "offer",
-      sdp: data.sdp
-    });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({
-      type: "answer",
-      sdp: answer.sdp
-    }));
-  }
-
-  if (data.type === "ice-candidate") {
-    try { await pc.addIceCandidate(data); } catch {}
-  }
-});
-
-/* CANCEL / EXIT SAFE */
-process.on("SIGINT", () => finalize("SIGINT"));
-process.on("SIGTERM", () => finalize("SIGTERM"));
-process.on("exit", () => finalize("exit"));
-process.on("uncaughtException", err => {
-  console.error(err);
-  finalize("exception");
-  process.exit(1);
-});
+      # 1️⃣2️⃣ Upload recording artifact
+      - name: Upload recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-recording
+          path: recording.mp4
