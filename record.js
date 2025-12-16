@@ -18,9 +18,24 @@ function finalize(reason) {
 
   if (ffmpeg) {
     try {
+      // Close stdin so FFmpeg knows no more data is coming
       ffmpeg.stdin.end();
-      ffmpeg.kill("SIGINT");
-    } catch {}
+
+      // Wait for FFmpeg to exit gracefully
+      ffmpeg.on("exit", (code, signal) => {
+        console.log(`FFmpeg exited with code ${code}, signal ${signal}`);
+      });
+
+      // Optional: force kill after timeout if it hangs
+      setTimeout(() => {
+        if (!ffmpeg.killed) {
+          console.log("FFmpeg taking too long, killing...");
+          ffmpeg.kill("SIGKILL");
+        }
+      }, 10000); // 10 seconds max wait
+    } catch (err) {
+      console.error("Error finalizing FFmpeg:", err);
+    }
   }
 }
 
