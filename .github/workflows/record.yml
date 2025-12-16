@@ -11,24 +11,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # Cache FFmpeg installation
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
         with:
-          node-version: 18
+          path: C:\ProgramData\chocolatey\bin
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('**/.github/workflows/*.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-ffmpeg-
 
+      # Install FFmpeg only if not cached
       - name: Install FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           choco install ffmpeg -y --no-progress
           echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      # Cache npm packages globally
+      - name: Cache global npm packages
+        id: cache-global-npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.APPDATA }}\npm
+            ${{ env.APPDATA }}\npm-cache
+          key: ${{ runner.os }}-global-npm-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-global-npm-
+
       - name: Install node-pre-gyp
+        if: steps.cache-global-npm.outputs.cache-hit != 'true'
         run: npm install -g node-pre-gyp
 
-      - name: Install npm dependencies
-        run: npm install
+      # Cache local npm dependencies
+      - name: Cache npm dependencies
+        id: cache-npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            **/package-lock.json
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
-      # 🔴 YE STEP ADD KIYA (IMPORTANT)
-      - name: Install jpeg-js
-        run: npm install jpeg-js
+      - name: Install npm dependencies
+        if: steps.cache-npm.outputs.cache-hit != 'true'
+        run: |
+          npm ci --no-audit --prefer-offline
+          npm install jpeg-js --no-save
 
       - name: Verify FFmpeg
         run: ffmpeg -version
