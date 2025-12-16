@@ -3,7 +3,7 @@ const WebSocket = require("ws");
 const { spawn } = require("child_process");
 const jpeg = require("jpeg-js");
 
-const SIGNALING_URL = "wss://investments-coastal-digest-add.trycloudflare.com";
+const SIGNALING_URL = "wss://dayton-beer-consent-playing.trycloudflare.com";
 
 const ws = new WebSocket(SIGNALING_URL);
 
