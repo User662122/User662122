@@ -9,9 +9,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # 1️⃣ Checkout repo
       - uses: actions/checkout@v4
 
-      # Cache FFmpeg installation
+      # 2️⃣ Cache FFmpeg installation
       - name: Cache FFmpeg
         id: cache-ffmpeg
         uses: actions/cache@v4
@@ -21,19 +22,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ffmpeg-
 
-      # Install FFmpeg only if not cached
+      # 3️⃣ Install FFmpeg if not cached
       - name: Install FFmpeg
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           choco install ffmpeg -y --no-progress
-          echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+      # 4️⃣ Ensure FFmpeg is in PATH
+      - name: Add FFmpeg to PATH
+        run: echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
 
+      # 5️⃣ Setup Node.js
       - uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
 
-      # Cache npm packages globally
+      # 6️⃣ Cache global npm packages
       - name: Cache global npm packages
         id: cache-global-npm
         uses: actions/cache@v4
@@ -45,11 +49,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-global-npm-
 
+      # 7️⃣ Install global npm packages if cache miss
       - name: Install node-pre-gyp
         if: steps.cache-global-npm.outputs.cache-hit != 'true'
         run: npm install -g node-pre-gyp
 
-      # Cache local npm dependencies
+      # 8️⃣ Cache local npm dependencies
       - name: Cache npm dependencies
         id: cache-npm
         uses: actions/cache@v4
@@ -61,18 +66,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
+      # 9️⃣ Install local npm dependencies if cache miss
       - name: Install npm dependencies
         if: steps.cache-npm.outputs.cache-hit != 'true'
         run: |
-          npm ci --no-audit --prefer-offline
+          npm ci --no-audit --prefer-offline || npm install
           npm install jpeg-js --no-save
 
+      # 🔟 Verify FFmpeg installation
       - name: Verify FFmpeg
         run: ffmpeg -version
 
+      # 1️⃣1️⃣ Run recorder
       - name: Run recorder
         run: node record.js
 
+      # 1️⃣2️⃣ Upload recording artifact
       - name: Upload recording
         if: always()
         uses: actions/upload-artifact@v4
