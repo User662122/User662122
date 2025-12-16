@@ -1,1 +1,0 @@
-chess_detector/app/libs/*.aar filter=lfs diff=lfs merge=lfs -text
