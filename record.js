@@ -10,6 +10,21 @@ const ws = new WebSocket(SIGNALING_URL);
 let pc;
 let ffmpeg;
 let started = false;
+let finalized = false;
+
+function finalize(reason) {
+  if (finalized) return;
+  finalized = true;
+
+  console.log("Finalizing recording because:", reason);
+
+  if (ffmpeg) {
+    try {
+      ffmpeg.stdin.end();
+      ffmpeg.kill("SIGINT");
+    } catch {}
+  }
+}
 
 ws.on("open", () => {
   pc = new wrtc.RTCPeerConnection({
@@ -22,10 +37,16 @@ ws.on("open", () => {
     const sink = new wrtc.nonstandard.RTCVideoSink(event.track);
 
     sink.onframe = ({ frame }) => {
-      const { width, height } = frame;
+      const width = frame.width;
+      const height = frame.height;
 
-      // Convert I420 → RGBA → JPEG
-      const rgba = wrtc.nonstandard.i420ToRgba(frame);
+      // ✅ FIX-1: Correct i420ToRgba usage
+      const rgba = wrtc.nonstandard.i420ToRgba({
+        width,
+        height,
+        data: frame.data
+      });
+
       const jpg = jpeg.encode(
         { data: rgba, width, height },
         80
@@ -33,6 +54,7 @@ ws.on("open", () => {
 
       if (!started) {
         started = true;
+
         ffmpeg = spawn("ffmpeg", [
           "-y",
           "-f", "image2pipe",
@@ -44,16 +66,24 @@ ws.on("open", () => {
           "-movflags", "+faststart",
           "recording.mp4"
         ]);
+
+        ffmpeg.stderr.on("data", d =>
+          console.log("[ffmpeg]", d.toString())
+        );
+
+        ffmpeg.on("close", code =>
+          console.log("ffmpeg closed with code", code)
+        );
       }
 
-      ffmpeg.stdin.write(jpg.data);
+      if (ffmpeg && !finalized) {
+        ffmpeg.stdin.write(jpg.data);
+      }
     };
 
     event.track.onended = () => {
-      if (ffmpeg) {
-        ffmpeg.stdin.end();
-        ffmpeg.kill("SIGINT");
-      }
+      console.log("Track ended");
+      finalize("track ended");
       sink.stop();
     };
   };
@@ -63,13 +93,34 @@ ws.on("message", async (msg) => {
   const data = JSON.parse(msg);
 
   if (data.type === "offer") {
-    await pc.setRemoteDescription(data);
+    await pc.setRemoteDescription({
+      type: "offer",
+      sdp: data.sdp
+    });
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify(answer));
+
+    ws.send(JSON.stringify({
+      type: "answer",
+      sdp: answer.sdp
+    }));
   }
 
   if (data.type === "ice-candidate") {
-    try { await pc.addIceCandidate(data); } catch {}
+    try {
+      await pc.addIceCandidate(data);
+    } catch {}
   }
+});
+
+/* ✅ FIX-2: Cancel / crash / exit safe finalize */
+
+process.on("SIGINT", () => finalize("SIGINT"));
+process.on("SIGTERM", () => finalize("SIGTERM"));
+process.on("exit", () => finalize("process exit"));
+process.on("uncaughtException", err => {
+  console.error(err);
+  finalize("uncaught exception");
+  process.exit(1);
 });
