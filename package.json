@@ -1,0 +1,12 @@
+{
+  "name": "webrtc-recorder",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node record.js"
+  },
+  "dependencies": {
+    "wrtc": "^0.4.7",
+    "ws": "^8.16.0"
+  }
+}
