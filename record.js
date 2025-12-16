@@ -10,29 +10,44 @@ let pc;
 let ffmpeg;
 let started = false;
 let finalized = false;
+let ffmpegExited = false;
 
-function finalize(reason) {
+function waitForFfmpegExit() {
+  return new Promise((resolve) => {
+    if (!ffmpeg || ffmpegExited) {
+      resolve();
+      return;
+    }
+    
+    const checkInterval = setInterval(() => {
+      if (ffmpegExited) {
+        clearInterval(checkInterval);
+        resolve();
+      }
+    }, 100);
+    
+    // Force resolve after 30 seconds
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      resolve();
+    }, 30000);
+  });
+}
+
+async function finalize(reason) {
   if (finalized) return;
   finalized = true;
   console.log("Finalizing because:", reason);
 
-  if (ffmpeg) {
+  if (ffmpeg && !ffmpegExited) {
     try {
-      // Close stdin so FFmpeg knows no more data is coming
+      console.log("Closing FFmpeg stdin to trigger finalization...");
       ffmpeg.stdin.end();
-
-      // Wait for FFmpeg to exit gracefully
-      ffmpeg.on("exit", (code, signal) => {
-        console.log(`FFmpeg exited with code ${code}, signal ${signal}`);
-      });
-
-      // Optional: force kill after timeout if it hangs
-      setTimeout(() => {
-        if (!ffmpeg.killed) {
-          console.log("FFmpeg taking too long, killing...");
-          ffmpeg.kill("SIGKILL");
-        }
-      }, 10000); // 10 seconds max wait
+      
+      // Wait for FFmpeg to properly exit and write moov atom
+      console.log("Waiting for FFmpeg to finalize MP4 (write moov atom)...");
+      await waitForFfmpegExit();
+      console.log("FFmpeg finalization complete");
     } catch (err) {
       console.error("Error finalizing FFmpeg:", err);
     }
@@ -75,16 +90,30 @@ ws.on("open", () => {
         ffmpeg.stderr.on("data", d =>
           console.log("[ffmpeg]", d.toString())
         );
+        
+        ffmpeg.on("exit", (code, signal) => {
+          ffmpegExited = true;
+          console.log(`FFmpeg exited with code ${code}, signal ${signal}`);
+        });
+        
+        ffmpeg.on("error", (err) => {
+          console.error("FFmpeg error:", err);
+          ffmpegExited = true;
+        });
       }
 
-      if (!finalized && ffmpeg) {
-        ffmpeg.stdin.write(Buffer.from(frame.data));
+      if (!finalized && ffmpeg && !ffmpegExited) {
+        try {
+          ffmpeg.stdin.write(Buffer.from(frame.data));
+        } catch (err) {
+          console.error("Error writing frame:", err);
+        }
       }
     };
 
-    event.track.onended = () => {
+    event.track.onended = async () => {
       console.log("Track ended");
-      finalize("track ended");
+      await finalize("track ended");
       sink.stop();
     };
   };
@@ -111,12 +140,47 @@ ws.on("message", async (msg) => {
   }
 });
 
-/* CANCEL / EXIT SAFE */
-process.on("SIGINT", () => finalize("SIGINT"));
-process.on("SIGTERM", () => finalize("SIGTERM"));
-process.on("exit", () => finalize("exit"));
-process.on("uncaughtException", err => {
-  console.error(err);
-  finalize("exception");
+ws.on("close", async () => {
+  console.log("WebSocket closed");
+  await finalize("websocket closed");
+  // Give time for file to be written
+  await new Promise(r => setTimeout(r, 2000));
+  process.exit(0);
+});
+
+ws.on("error", async (err) => {
+  console.error("WebSocket error:", err);
+  await finalize("websocket error");
   process.exit(1);
 });
+
+/* CANCEL / EXIT SAFE */
+async function gracefulShutdown(reason) {
+  await finalize(reason);
+  // Give FFmpeg time to write the moov atom
+  await new Promise(r => setTimeout(r, 2000));
+  process.exit(0);
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+process.on("uncaughtException", async (err) => {
+  console.error("Uncaught exception:", err);
+  await finalize("exception");
+  await new Promise(r => setTimeout(r, 2000));
+  process.exit(1);
+});
+
+// Keep process alive and set recording duration
+const RECORDING_DURATION_MS = 60000; // 60 seconds recording
+console.log(`Recording will run for ${RECORDING_DURATION_MS/1000} seconds...`);
+
+setTimeout(async () => {
+  console.log("Recording duration reached, finalizing...");
+  await finalize("duration reached");
+  // Give FFmpeg time to finalize properly
+  await new Promise(r => setTimeout(r, 5000));
+  console.log("Recording complete, exiting...");
+  process.exit(0);
+}, RECORDING_DURATION_MS);
