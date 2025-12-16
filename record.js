@@ -4,7 +4,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 
 // 🔴 YAHAN APNA CLOUDFARE URL DAALO
-const SIGNALING_URL = "wss://contamination-models-beatles-philosophy.trycloudflare.com";
+const SIGNALING_URL = "wss://bottom-define-nursery-commitments.trycloudflare.com";
 
 console.log("Connecting to:", SIGNALING_URL);
 
@@ -14,81 +14,131 @@ let pc;
 let ffmpeg;
 let sink;
 let recording = false;
+let framesWritten = 0;
 const filename = `recording_${Date.now()}.mp4`;
 
-function cleanup() {
-    console.log("Cleaning up...");
+// Function to properly stop FFmpeg and save file
+function stopFFmpeg() {
+    return new Promise((resolve) => {
+        if (!ffmpeg || ffmpeg.killed) {
+            resolve();
+            return;
+        }
+        
+        console.log("Stopping FFmpeg gracefully...");
+        
+        // End stdin to signal EOF
+        if (ffmpeg.stdin.writable) {
+            ffmpeg.stdin.end();
+        }
+        
+        // Wait for FFmpeg to finish
+        ffmpeg.on('close', (code) => {
+            console.log(`FFmpeg exited with code ${code}`);
+            console.log(`✅ Recording saved to: ${filename}`);
+            console.log(`Frames written: ${framesWritten}`);
+            
+            // Verify file exists and has content
+            if (fs.existsSync(filename)) {
+                const stats = fs.statSync(filename);
+                console.log(`File size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+                if (stats.size === 0) {
+                    console.log("⚠️  Warning: File is empty!");
+                }
+            } else {
+                console.log("❌ File was not created!");
+            }
+            
+            resolve();
+        });
+        
+        // Kill after timeout if it doesn't exit
+        setTimeout(() => {
+            if (ffmpeg && !ffmpeg.killed) {
+                console.log("Force killing FFmpeg...");
+                ffmpeg.kill('SIGKILL');
+                resolve();
+            }
+        }, 3000);
+    });
+}
+
+async function cleanup() {
+    console.log("\n🔄 Cleaning up resources...");
+    
+    // Stop sink first
     if (sink) {
+        console.log("Stopping video sink...");
         sink.stop();
         sink = null;
     }
-    if (ffmpeg) {
-        ffmpeg.stdin.end(); // Properly close stdin
-        setTimeout(() => {
-            if (ffmpeg && !ffmpeg.killed) {
-                ffmpeg.kill('SIGTERM');
-            }
-        }, 1000);
-        ffmpeg = null;
-    }
+    
+    // Stop FFmpeg properly
+    await stopFFmpeg();
+    
+    // Close WebRTC connection
     if (pc) {
+        console.log("Closing WebRTC connection...");
         pc.close();
         pc = null;
     }
+    
+    // Close WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log("Closing WebSocket...");
+        ws.close();
+    }
+    
     recording = false;
+    console.log("✅ Cleanup complete!");
 }
 
 function startRecording() {
-    console.log("Starting recording to:", filename);
+    console.log("🎬 Starting recording to:", filename);
     
     ffmpeg = spawn("ffmpeg", [
         "-y",                    // Overwrite output file
         "-f", "rawvideo",        // Input format
-        "-pix_fmt", "yuv420p",   // Pixel format
-        "-s", "720x1280",        // Resolution
-        "-r", "30",              // Frame rate
+        "-pixel_format", "yuv420p", // Pixel format
+        "-video_size", "720x1280", // Resolution
+        "-framerate", "30",      // Frame rate
         "-i", "-",               // Input from stdin
         "-c:v", "libx264",       // Video codec
-        "-preset", "veryfast",   // Encoding preset
-        "-crf", "23",            // Quality (lower = better)
-        "-pix_fmt", "yuv420p",   // Output pixel format
-        "-movflags", "+faststart", // Optimize for streaming
+        "-preset", "ultrafast",  // Fast encoding
+        "-crf", "28",            // Quality
+        "-movflags", "frag_keyframe+empty_moov+faststart", // Better for streaming
+        "-f", "mp4",             // Force MP4 format
         filename
     ], {
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'ignore', 'pipe'] // Redirect stderr to pipe
     });
 
-    // Log FFmpeg output
+    // Monitor FFmpeg output
     ffmpeg.stderr.on('data', (data) => {
-        console.log("FFmpeg:", data.toString());
-    });
-
-    ffmpeg.on('close', (code) => {
-        console.log(`FFmpeg exited with code ${code}`);
-        if (code === 0) {
-            console.log(`✅ Recording saved to: ${filename}`);
-            console.log(`File size: ${fs.statSync(filename).size} bytes`);
-        } else {
-            console.log(`❌ FFmpeg failed with code: ${code}`);
+        const output = data.toString();
+        // Show important messages only
+        if (output.includes('frame=') || output.includes('size=') || output.includes('time=')) {
+            process.stdout.write(`\rFFmpeg: ${output.trim()}`);
         }
     });
 
     ffmpeg.on('error', (err) => {
-        console.error("FFmpeg error:", err);
+        console.error("\n❌ FFmpeg error:", err.message);
     });
 
     recording = true;
+    console.log("⏺️  Recording started. Press Ctrl+C to stop and save.");
 }
 
 ws.on("open", () => {
-  console.log("WebSocket connected");
+  console.log("✅ WebSocket connected");
 
   pc = new wrtc.RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
   });
 
   pc.ontrack = (event) => {
-    console.log("Track received:", event.track.kind);
+    console.log(`🎥 Track received: ${event.track.kind} (${event.track.id})`);
 
     if (event.track.kind !== "video") return;
 
@@ -106,18 +156,27 @@ ws.on("open", () => {
     let frameCount = 0;
     sink.onframe = ({ frame }) => {
         frameCount++;
+        framesWritten++;
+        
+        // Show progress every 30 frames (~1 second)
         if (frameCount % 30 === 0) {
-            console.log(`Frames received: ${frameCount}`);
+            process.stdout.write(`\r📊 Frames received: ${frameCount} (${framesWritten} written)`);
         }
         
         if (ffmpeg && ffmpeg.stdin.writable) {
             try {
-                ffmpeg.stdin.write(Buffer.from(frame.data));
+                // Write frame data to FFmpeg
+                const written = ffmpeg.stdin.write(Buffer.from(frame.data));
+                if (!written) {
+                    console.log("\n⚠️  FFmpeg buffer full, frames may be dropped");
+                }
             } catch (err) {
-                console.error("Failed to write frame:", err.message);
+                console.error("\n❌ Failed to write frame:", err.message);
             }
         }
     };
+    
+    console.log("🚀 Video sink initialized. Waiting for frames...");
   };
 
   // Send client-connected message
@@ -128,7 +187,7 @@ ws.on("message", async (msg) => {
   const data = JSON.parse(msg);
 
   if (data.type === "offer") {
-    console.log("Offer received");
+    console.log("📨 Offer received");
 
     await pc.setRemoteDescription({
       type: "offer",
@@ -143,15 +202,15 @@ ws.on("message", async (msg) => {
       sdp: answer.sdp
     }));
     
-    console.log("Answer sent");
+    console.log("📤 Answer sent");
   }
 
   if (data.type === "ice-candidate") {
     try {
       await pc.addIceCandidate(data);
-      console.log("ICE candidate added");
+      console.log("❄️  ICE candidate added");
     } catch (err) {
-      console.log("ICE candidate error:", err.message);
+      console.log("⚠️  ICE candidate error:", err.message);
     }
   }
   
@@ -162,23 +221,39 @@ ws.on("message", async (msg) => {
 });
 
 ws.on("error", (err) => {
-  console.error("WebSocket error:", err);
+  console.error("❌ WebSocket error:", err.message);
 });
 
-ws.on("close", () => {
-  console.log("WebSocket closed");
-  cleanup();
+ws.on("close", async () => {
+  console.log("\n🔌 WebSocket closed");
+  await cleanup();
 });
 
-// Handle process termination
-process.on('SIGINT', () => {
-  console.log("\nStopping recording...");
-  cleanup();
-  setTimeout(() => process.exit(0), 2000);
+// Handle Ctrl+C gracefully
+process.on('SIGINT', async () => {
+  console.log("\n\n🛑 Ctrl+C pressed. Stopping gracefully...");
+  await cleanup();
+  process.exit(0);
 });
 
-process.on('exit', () => {
-  cleanup();
+// Handle other termination signals
+process.on('SIGTERM', async () => {
+  console.log("\n🔚 SIGTERM received");
+  await cleanup();
+  process.exit(0);
 });
 
-console.log("Script started. Press Ctrl+C to stop recording and save file.");
+// Handle process exit
+process.on('exit', (code) => {
+  console.log(`\n👋 Process exiting with code ${code}`);
+});
+
+console.log("=".repeat(50));
+console.log("📱 Android Screen Stream Recorder");
+console.log("=".repeat(50));
+console.log("Instructions:");
+console.log("1. Make sure Android app is streaming");
+console.log("2. This script will automatically connect");
+console.log("3. Video will be saved to: recording_TIMESTAMP.mp4");
+console.log("4. Press Ctrl+C to stop and save the recording");
+console.log("=".repeat(50));
