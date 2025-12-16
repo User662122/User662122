@@ -19,23 +19,30 @@ jobs:
         with:
           node-version: 18
 
-      # 3️⃣ Install node-pre-gyp globally (fix wrtc issue)
+      # 3️⃣ Install FFmpeg using Chocolatey
+      - name: Install FFmpeg
+        run: |
+          choco install ffmpeg -y --no-progress
+          # Add FFmpeg to PATH
+          echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+
+      # 4️⃣ Install node-pre-gyp globally (fix wrtc issue)
       - name: Install node-pre-gyp globally
         run: npm install -g node-pre-gyp
 
-      # 4️⃣ Install dependencies
+      # 5️⃣ Install dependencies
       - name: Install npm dependencies
         run: npm install
 
-      # 5️⃣ Check FFmpeg availability
+      # 6️⃣ Check FFmpeg availability
       - name: Verify FFmpeg
         run: ffmpeg -version
 
-      # 6️⃣ Start WebRTC recorder
+      # 7️⃣ Start WebRTC recorder
       - name: Run recorder
         run: node record.js
 
-      # 7️⃣ Upload recording artifact
+      # 8️⃣ Upload recording artifact
       - name: Upload recording
         if: always()
         uses: actions/upload-artifact@v4
