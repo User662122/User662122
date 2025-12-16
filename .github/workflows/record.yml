@@ -23,8 +23,12 @@ jobs:
       - name: Install node-pre-gyp
         run: npm install -g node-pre-gyp
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm install
+
+      # 🔴 YE STEP ADD KIYA (IMPORTANT)
+      - name: Install jpeg-js
+        run: npm install jpeg-js
 
       - name: Verify FFmpeg
         run: ffmpeg -version
