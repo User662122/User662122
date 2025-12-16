@@ -3,7 +3,7 @@ const WebSocket = require("ws");
 const { spawn } = require("child_process");
 
 // 🔴 YAHAN APNA CLOUDFARE URL DAALO
-const SIGNALING_URL = "wss://biography-flu-plot-biographies.trycloudflare.com";
+const SIGNALING_URL = "wss://projector-rely-attitudes-delaware.trycloudflare.com";
 
 console.log("Connecting to:", SIGNALING_URL);
 
