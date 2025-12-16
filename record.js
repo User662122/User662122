@@ -1,7 +1,6 @@
 const wrtc = require("wrtc");
 const WebSocket = require("ws");
 const { spawn } = require("child_process");
-const jpeg = require("jpeg-js");
 
 const SIGNALING_URL = "wss://dayton-beer-consent-playing.trycloudflare.com";
 
@@ -15,8 +14,7 @@ let finalized = false;
 function finalize(reason) {
   if (finalized) return;
   finalized = true;
-
-  console.log("Finalizing recording because:", reason);
+  console.log("Finalizing because:", reason);
 
   if (ffmpeg) {
     try {
@@ -40,28 +38,20 @@ ws.on("open", () => {
       const width = frame.width;
       const height = frame.height;
 
-      // ✅ FIX-1: Correct i420ToRgba usage
-      const rgba = wrtc.nonstandard.i420ToRgba({
-        width,
-        height,
-        data: frame.data
-      });
-
-      const jpg = jpeg.encode(
-        { data: rgba, width, height },
-        80
-      );
-
       if (!started) {
         started = true;
 
+        console.log(`Starting ffmpeg ${width}x${height}`);
+
         ffmpeg = spawn("ffmpeg", [
           "-y",
-          "-f", "image2pipe",
-          "-vcodec", "mjpeg",
+          "-f", "rawvideo",
+          "-pix_fmt", "yuv420p",
+          "-s", `${width}x${height}`,
           "-r", "30",
           "-i", "-",
           "-c:v", "libx264",
+          "-preset", "veryfast",
           "-pix_fmt", "yuv420p",
           "-movflags", "+faststart",
           "recording.mp4"
@@ -70,14 +60,10 @@ ws.on("open", () => {
         ffmpeg.stderr.on("data", d =>
           console.log("[ffmpeg]", d.toString())
         );
-
-        ffmpeg.on("close", code =>
-          console.log("ffmpeg closed with code", code)
-        );
       }
 
-      if (ffmpeg && !finalized) {
-        ffmpeg.stdin.write(jpg.data);
+      if (!finalized && ffmpeg) {
+        ffmpeg.stdin.write(Buffer.from(frame.data));
       }
     };
 
@@ -97,10 +83,8 @@ ws.on("message", async (msg) => {
       type: "offer",
       sdp: data.sdp
     });
-
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-
     ws.send(JSON.stringify({
       type: "answer",
       sdp: answer.sdp
@@ -108,19 +92,16 @@ ws.on("message", async (msg) => {
   }
 
   if (data.type === "ice-candidate") {
-    try {
-      await pc.addIceCandidate(data);
-    } catch {}
+    try { await pc.addIceCandidate(data); } catch {}
   }
 });
 
-/* ✅ FIX-2: Cancel / crash / exit safe finalize */
-
+/* CANCEL / EXIT SAFE */
 process.on("SIGINT", () => finalize("SIGINT"));
 process.on("SIGTERM", () => finalize("SIGTERM"));
-process.on("exit", () => finalize("process exit"));
+process.on("exit", () => finalize("exit"));
 process.on("uncaughtException", err => {
   console.error(err);
-  finalize("uncaught exception");
+  finalize("exception");
   process.exit(1);
 });
